@@ -1,0 +1,218 @@
+# ==============================================================================
+# AURA - Repository .gitignore
+# Stack: Next.js (Frontend) + FastAPI / Python (Backend) + Polyglot Tooling
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Operating System Files
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ------------------------------------------------------------------------------
+# 2. IDEs and Code Editors
+# ------------------------------------------------------------------------------
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.history/
+.ionide/
+
+# JetBrains (PyCharm, WebStorm, etc.)
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Other Editors
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ------------------------------------------------------------------------------
+# 3. Environment Variables & Secrets
+# ------------------------------------------------------------------------------
+# Environment config files
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Preserve example/template files
+!.env.example
+!.env.template
+
+# Secret credentials, certificates, keys
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+credentials.json
+service-account*.json
+
+# ------------------------------------------------------------------------------
+# 4. Python - Bytecode, Caching & Runtime
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ------------------------------------------------------------------------------
+# 5. Python - Packaging & Build Artifacts
+# ------------------------------------------------------------------------------
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ------------------------------------------------------------------------------
+# 6. Python - Virtual Environments
+# ------------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# ------------------------------------------------------------------------------
+# 7. Python - Testing, Linting & Type Checking
+# ------------------------------------------------------------------------------
+# Pytest
+.pytest_cache/
+
+# Coverage
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+.hypothesis/
+
+# Type Checking (Mypy, Pyre, Pytype)
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Linters / Formatters
+.ruff_cache/
+
+# ------------------------------------------------------------------------------
+# 8. Node.js - Dependencies & Logs
+# ------------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Diagnostic dumps
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# ------------------------------------------------------------------------------
+# 9. Next.js & Frontend Build Outputs
+# ------------------------------------------------------------------------------
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts.bak
+
+# ------------------------------------------------------------------------------
+# 10. Frontend - Testing & Tooling
+# ------------------------------------------------------------------------------
+# Coverage
+coverage/
+
+# Cypress / Playwright
+cypress/screenshots/
+cypress/videos/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Storybook
+storybook-static/
+
+# ------------------------------------------------------------------------------
+# 11. Databases, Local Storage & Logs
+# ------------------------------------------------------------------------------
+# Local databases (FastAPI / local development)
+*.db
+*.sqlite
+*.sqlite3
+
+# Application log outputs
+logs/
+*.log
+
+# Temporary scratch & runtime dumps
+*.tmp
+*.temp
+dump.rdb
