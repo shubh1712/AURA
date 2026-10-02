@@ -49,16 +49,42 @@ class AnalysisRequest(BaseModel):
         return trimmed
 
 
+from app.schemas.decision_model import DecisionModel
+
+
 class AnalysisResponse(BaseModel):
-    """Initial API response contract for a staged decision analysis."""
+    """API response contract for a completed decision analysis."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "analysis_id": "c9bf9e57-1685-4c89-bafb-ff5af830be8a",
-                "status": "pending",
+                "status": "completed",
+                "decision_model": {
+                    "id": "dec_sample",
+                    "decision": {
+                        "raw_prompt": "Should we migrate to a distributed database?",
+                        "summary": "Evaluate migrating to distributed architecture.",
+                        "decision_type": "architecture_technology",
+                        "time_horizon": "medium_term",
+                    },
+                    "complexity": {
+                        "level": "medium",
+                        "reasoning": "Data consistency and replication trade-offs.",
+                        "reversibility": "partially_reversible",
+                        "score": 45.0,
+                    },
+                    "objectives": [],
+                    "variables": [],
+                    "constraints": [],
+                    "stakeholders": [],
+                    "tradeoffs": [],
+                    "assumptions": [],
+                    "unknowns": [],
+                    "key_questions": ["What is our latency budget?"],
+                },
                 "question": "Should we migrate from a monolithic database to a distributed architecture?",
-                "message": "Decision analysis request received and queued for processing.",
+                "message": "Decision deconstruction and provenance audit completed successfully.",
             }
         },
     )
@@ -68,14 +94,18 @@ class AnalysisResponse(BaseModel):
         description="Unique identifier assigned to the analysis request.",
     )
     status: str = Field(
-        ...,
-        description="Current lifecycle status of the analysis (e.g. 'pending', 'staged').",
+        default="completed",
+        description="Current lifecycle status of the analysis ('completed', 'failed', 'staged').",
+    )
+    decision_model: Optional[DecisionModel] = Field(
+        default=None,
+        description="Canonical decomposed decision model with verified provenance and complexity.",
     )
     question: str = Field(
-        ...,
+        default="",
         description="The validated decision question submitted for analysis.",
     )
     message: str = Field(
-        ...,
+        default="Decision analysis completed successfully.",
         description="Human-readable informational message regarding the processing state.",
     )

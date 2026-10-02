@@ -13,6 +13,7 @@ export interface AnalysisResponse {
   status: string;
   question: string;
   message: string;
+  decision_model?: Record<string, unknown> | null;
 }
 
 export interface HealthResponse {

@@ -9,7 +9,7 @@ router = APIRouter(tags=["Analysis"])
     "/analyze",
     response_model=AnalysisResponse,
     status_code=status.HTTP_200_OK,
-    summary="Stage a decision question for intelligence processing",
+    summary="Deconstruct and analyze a decision question",
 )
 async def analyze_decision(
     request: AnalysisRequest,

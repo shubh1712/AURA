@@ -31,7 +31,9 @@ def test_analyze_valid_full_payload(client: TestClient) -> None:
     assert "analysis_id" in data
     assert isinstance(data["analysis_id"], str)
     assert len(data["analysis_id"]) > 0
-    assert data["status"] == "pending"
+    assert data["status"] == "completed"
+    assert "decision_model" in data
+    assert data["decision_model"] is not None
     assert (
         data["question"]
         == "Should we migrate from a monolithic database to a distributed architecture?"
@@ -50,7 +52,8 @@ def test_analyze_valid_minimal_payload(client: TestClient) -> None:
 
     data = response.json()
     assert data["question"] == payload["question"]
-    assert data["status"] == "pending"
+    assert data["status"] == "completed"
+    assert "decision_model" in data
     assert "analysis_id" in data
 
 
