@@ -1,9 +1,16 @@
 export type DecisionStatus =
+  | "idle"
   | "draft"
-  | "submitted"
-  | "analyzing"
+  | "submitting"
   | "completed"
-  | "failed";
+  | "failed"
+  | "error";
+
+export interface DecisionFormData {
+  question: string;
+  context: string;
+  constraints: string;
+}
 
 export interface DecisionInput {
   title: string;
@@ -20,9 +27,8 @@ export interface DecisionDecompositionSummary {
 
 export interface AnalysisSession {
   id: string;
-  input: DecisionInput;
+  formData: DecisionFormData;
   status: DecisionStatus;
   createdAt: string;
   updatedAt: string;
-  decomposition?: DecisionDecompositionSummary;
 }
