@@ -31,7 +31,7 @@ class DummyStructuredOutput(BaseModel):
 def test_llm_config_defaults() -> None:
     """Verifies default LLM configuration parameters."""
     cfg = LLMConfig()
-    assert cfg.model_name == "gemini-2.5-flash"
+    assert cfg.model_name == "gemini-3.8-flash"
     assert cfg.temperature == 0.2
     assert cfg.timeout_seconds == 30.0
     assert cfg.max_retries == 2

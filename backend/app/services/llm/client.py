@@ -64,7 +64,7 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_name: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3.8-flash",
         description="Target model identifier.",
     )
     temperature: float = Field(

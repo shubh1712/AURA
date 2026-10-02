@@ -441,14 +441,19 @@ def test_gemini_client_missing_api_key_raises_auth_error():
 def test_gemini_client_successful_generation(valid_decision_dict: Dict[str, Any]):
     """Tests GeminiLLMClient successful flow using an injected mock transport."""
     gemini_api_response = {
-        "candidates": [
+        "id": "interaction_sample_001",
+        "status": "completed",
+        "steps": [
             {
-                "content": {
-                    "parts": [{"text": json.dumps(valid_decision_dict)}],
-                },
-                "finishReason": "STOP",
+                "type": "model_output",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(valid_decision_dict),
+                    }
+                ],
             }
-        ]
+        ],
     }
 
     mock_transport = httpx.MockTransport(

@@ -1,8 +1,8 @@
 """AURA Gemini LLM Client Implementation.
 
 Provides a concrete implementation of LLMClient communicating with Google's
-Gemini API using standard HTTP transport and native structured output modes.
-All Gemini SDK or REST dependencies remain strictly encapsulated within
+Gemini API using the google-genai Python SDK and the Interactions API.
+All Gemini SDK dependencies remain strictly encapsulated within
 this service module.
 """
 
@@ -10,6 +10,15 @@ import os
 from typing import Any, Dict, List, Optional, Type, TypeVar
 import httpx
 from pydantic import BaseModel
+
+from google import genai
+from google.genai import errors
+from google.genai.types import HttpOptions
+
+try:
+    from google.genai._gaos.lib import compat_errors
+except ImportError:
+    compat_errors = None
 
 from app.config import settings
 from app.services.llm.client import (
@@ -26,8 +35,6 @@ from app.services.llm.client import (
 from app.services.llm.parser import parse_and_validate_structured_output
 
 T = TypeVar("T", bound=BaseModel)
-
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
 class GeminiLLMClient(LLMClient):
@@ -50,7 +57,7 @@ class GeminiLLMClient(LLMClient):
             self.api_key = api_key
         else:
             self.api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
-        self.default_model = default_model or settings.GEMINI_MODEL or "gemini-2.5-flash"
+        self.default_model = default_model or settings.GEMINI_MODEL or "gemini-3.8-flash"
         self._http_client = http_client
 
     def _get_api_key(self) -> str:
@@ -94,105 +101,115 @@ class GeminiLLMClient(LLMClient):
         api_key = self._get_api_key()
         model_name = cfg.model_name or self.default_model
 
-        # Build standard Gemini REST payload
-        endpoint = f"{GEMINI_BASE_URL}/{model_name}:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
+        # Configure google-genai client
+        http_options = HttpOptions(httpx_client=self._http_client) if self._http_client is not None else None
+        genai_client = genai.Client(api_key=api_key, http_options=http_options)
+
+        response_format = {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": response_schema.model_json_schema(),
         }
 
-        generation_config: Dict[str, Any] = {
-            "temperature": cfg.temperature,
-            "responseMimeType": "application/json",
+        create_kwargs: Dict[str, Any] = {
+            "model": model_name,
+            "input": prompt,
+            "response_format": response_format,
         }
-        if cfg.top_p is not None:
-            generation_config["topP"] = cfg.top_p
-        if cfg.max_output_tokens is not None:
-            generation_config["maxOutputTokens"] = cfg.max_output_tokens
-
-        body: Dict[str, Any] = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}],
-                }
-            ],
-            "generationConfig": generation_config,
-        }
-
         if system_instruction:
-            body["systemInstruction"] = {
-                "parts": [{"text": system_instruction}],
-            }
+            create_kwargs["system_instruction"] = system_instruction
+        if cfg.timeout_seconds:
+            create_kwargs["timeout"] = cfg.timeout_seconds
 
-        # Execute HTTP request with configured timeout
-        client = self._http_client or httpx.Client(timeout=cfg.timeout_seconds)
+        timeout_error_classes = (httpx.TimeoutException,)
+        if compat_errors and hasattr(compat_errors, "APITimeoutError"):
+            timeout_error_classes = (httpx.TimeoutException, compat_errors.APITimeoutError)
+
         try:
-            response = client.post(endpoint, json=body, headers=headers)
-        except httpx.TimeoutException as e:
+            interaction = genai_client.interactions.create(**create_kwargs)
+        except timeout_error_classes as e:
             raise LLMTimeoutError(
                 f"Gemini API request timed out after {cfg.timeout_seconds}s.",
-                details={"model": model_name, "timeout": cfg.timeout_seconds},
+                details={"model": model_name, "timeout": cfg.timeout_seconds, "error": str(e)},
             ) from e
-        except httpx.RequestError as e:
+        except Exception as e:
+            status_code = getattr(e, "status_code", None) or getattr(e, "code", None)
+            err_text = str(e)
+
+            is_auth_error = (
+                status_code in (401, 403)
+                or (compat_errors and isinstance(e, (compat_errors.AuthenticationError, compat_errors.PermissionDeniedError)))
+            )
+            is_rate_limit = (
+                status_code == 429
+                or (compat_errors and isinstance(e, compat_errors.RateLimitError))
+            )
+            is_provider_error = (
+                (status_code and status_code >= 500)
+                or isinstance(e, errors.ServerError)
+                or (compat_errors and isinstance(e, compat_errors.InternalServerError))
+            )
+            is_client_error = (
+                (status_code and status_code >= 400)
+                or isinstance(e, errors.ClientError)
+                or (compat_errors and isinstance(e, (compat_errors.BadRequestError, compat_errors.ClientError)))
+            )
+
+            if is_auth_error:
+                raise LLMAuthenticationError(
+                    f"Gemini authentication failed ({status_code}): {err_text}",
+                    details={"status_code": status_code, "body": err_text},
+                ) from e
+            elif is_rate_limit:
+                raise LLMRateLimitError(
+                    f"Gemini rate limit or quota exceeded ({status_code}): {err_text}",
+                    details={"status_code": status_code, "body": err_text},
+                ) from e
+            elif is_provider_error:
+                raise LLMProviderError(
+                    f"Gemini upstream server error ({status_code}): {err_text}",
+                    details={"status_code": status_code, "body": err_text},
+                ) from e
+            elif is_client_error:
+                raise LLMError(
+                    f"Gemini API client error ({status_code}): {err_text}",
+                    details={"status_code": status_code, "body": err_text},
+                ) from e
+            elif isinstance(e, httpx.RequestError):
+                raise LLMError(
+                    f"Network transport error calling Gemini API: {e}",
+                    details={"model": model_name, "error": str(e)},
+                ) from e
             raise LLMError(
-                f"Network transport error calling Gemini API: {e}",
+                f"Unexpected error communicating with Gemini API: {e}",
                 details={"model": model_name, "error": str(e)},
             ) from e
-        finally:
-            # If we created a temporary client, close it
-            if self._http_client is None:
-                client.close()
 
-        # Handle HTTP status codes
-        if response.status_code in (401, 403):
-            raise LLMAuthenticationError(
-                f"Gemini authentication failed ({response.status_code}): {response.text}",
-                details={"status_code": response.status_code, "body": response.text},
-            )
-        elif response.status_code == 429:
-            raise LLMRateLimitError(
-                f"Gemini rate limit or quota exceeded ({response.status_code}): {response.text}",
-                details={"status_code": response.status_code, "body": response.text},
-            )
-        elif response.status_code >= 500:
-            raise LLMProviderError(
-                f"Gemini upstream server error ({response.status_code}): {response.text}",
-                details={"status_code": response.status_code, "body": response.text},
-            )
-        elif response.status_code >= 400:
-            raise LLMError(
-                f"Gemini API client error ({response.status_code}): {response.text}",
-                details={"status_code": response.status_code, "body": response.text},
-            )
+        # Extract output text using convenience property or fallback inspection
+        raw_text = getattr(interaction, "output_text", None)
+        if not raw_text and isinstance(interaction, dict):
+            raw_text = interaction.get("output_text")
+            if not raw_text and "steps" in interaction:
+                for step in reversed(interaction["steps"]):
+                    if step.get("type") == "model_output":
+                        for part in step.get("content", []):
+                            if part.get("type") == "text":
+                                raw_text = part.get("text")
+                                break
+                    if raw_text:
+                        break
+            elif not raw_text and "candidates" in interaction:
+                candidates = interaction.get("candidates") or []
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts and parts[0].get("text"):
+                        raw_text = parts[0]["text"]
 
-        # Parse response body and extract content
-        try:
-            resp_json = response.json()
-        except Exception as e:
-            raise LLMResponseValidationError(
-                f"Gemini returned non-JSON HTTP response body: {response.text[:200]}",
-                details={"raw_body": response.text[:500]},
-            ) from e
-
-        candidates = resp_json.get("candidates") or []
-        if not candidates:
-            # Check for safety blocks or empty candidate list
-            prompt_feedback = resp_json.get("promptFeedback", {})
-            raise LLMResponseValidationError(
-                f"Gemini returned no candidates. Prompt feedback: {prompt_feedback}",
-                details={"response": resp_json},
-            )
-
-        candidate = candidates[0]
-        content_parts = candidate.get("content", {}).get("parts", [])
-        if not content_parts or not content_parts[0].get("text"):
+        if not raw_text or not str(raw_text).strip():
             raise LLMResponseValidationError(
                 "Gemini candidate returned empty text parts.",
-                details={"candidate": candidate},
+                details={"interaction": str(interaction)},
             )
-
-        raw_text = content_parts[0]["text"]
 
         # Delegate parsing, normalization, and Pydantic validation to StructuredOutputParser
         return parse_and_validate_structured_output(
