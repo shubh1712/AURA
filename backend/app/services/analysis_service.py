@@ -7,8 +7,8 @@ are orchestrated here, keeping API controllers thin and free of model dependenci
 
 import logging
 import uuid
-from typing import Optional
-from fastapi import HTTPException, status
+from typing import Callable, Optional
+from fastapi import Depends, HTTPException, status
 
 from app.engines.question_understanding import QuestionUnderstandingEngine
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
@@ -29,38 +29,47 @@ logger = logging.getLogger(__name__)
 class AnalysisService:
     """Orchestrates decision analysis workflows and error translation."""
 
+    _client_factory: Optional[Callable[[], LLMClient]] = None
+
+    @classmethod
+    def set_client_factory(cls, factory: Optional[Callable[[], LLMClient]]) -> None:
+        """Sets custom factory for providing LLMClient instances (e.g. in tests)."""
+        cls._client_factory = factory
+
+    @classmethod
+    def get_default_client(cls) -> LLMClient:
+        """Returns the default LLMClient instance."""
+        if cls._client_factory is not None:
+            return cls._client_factory()
+        import os
+        from app.config import settings
+        from app.services.llm.gemini import GeminiLLMClient
+
+        api_key = (settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")).strip()
+        return GeminiLLMClient(api_key=api_key)
+
     def __init__(
         self,
         engine: Optional[QuestionUnderstandingEngine] = None,
+        llm_client: Optional[LLMClient] = None,
     ) -> None:
         """Initializes AnalysisService.
 
         Args:
             engine: Optional pre-configured QuestionUnderstandingEngine.
+            llm_client: Optional pre-configured LLMClient.
         """
         if engine is not None:
             self.engine = engine
+        elif llm_client is not None:
+            self.engine = QuestionUnderstandingEngine(llm_client=llm_client)
         else:
             self.engine = self._build_default_engine()
 
-    @staticmethod
-    def _build_default_engine() -> QuestionUnderstandingEngine:
+    @classmethod
+    def _build_default_engine(cls) -> QuestionUnderstandingEngine:
         """Builds default QuestionUnderstandingEngine with configured LLMClient."""
-        import os
-        import sys
-        from app.config import settings
-        from app.services.llm.gemini import GeminiLLMClient
-        from app.services.llm.client import MockLLMClient
-        from app.services.llm.mock_data import get_default_decision_model
-
-        # If running under automated unit test runner (pytest) or no API key, use deterministic mock
-        if "pytest" in sys.modules or not (settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")):
-            mock = MockLLMClient()
-            mock.register_response(DecisionModel, get_default_decision_model())
-            return QuestionUnderstandingEngine(llm_client=mock)
-
-        api_key = (settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")).strip()
-        client: LLMClient = GeminiLLMClient(api_key=api_key)
+        client = cls.get_default_client()
         return QuestionUnderstandingEngine(llm_client=client)
 
     def analyze(self, request: AnalysisRequest) -> AnalysisResponse:
@@ -140,6 +149,20 @@ class AnalysisService:
             ) from e
 
 
-def get_analysis_service() -> AnalysisService:
+def get_llm_client() -> LLMClient:
+    """FastAPI dependency provider for LLMClient."""
+    return AnalysisService.get_default_client()
+
+
+def get_question_understanding_engine(
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> QuestionUnderstandingEngine:
+    """FastAPI dependency provider for QuestionUnderstandingEngine."""
+    return QuestionUnderstandingEngine(llm_client=llm_client)
+
+
+def get_analysis_service(
+    engine: QuestionUnderstandingEngine = Depends(get_question_understanding_engine),
+) -> AnalysisService:
     """FastAPI dependency provider for AnalysisService."""
-    return AnalysisService()
+    return AnalysisService(engine=engine)

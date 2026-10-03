@@ -138,6 +138,7 @@ class Objective(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'obj_primary', 'obj_2').",
     )
     description: str = Field(
@@ -151,6 +152,7 @@ class Objective(BaseModel):
     )
     target_metric: Optional[str] = Field(
         default=None,
+        max_length=100,
         description="Optional quantifiable metric indicating success (e.g. '+30% acquisition').",
     )
     provenance: ProvenanceType = Field(
@@ -166,11 +168,13 @@ class Variable(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'var_price_discount').",
     )
     name: str = Field(
         ...,
         min_length=2,
+        max_length=100,
         description="Human-readable variable label.",
     )
     description: str = Field(
@@ -192,6 +196,7 @@ class Variable(BaseModel):
     )
     unit: Optional[str] = Field(
         default=None,
+        max_length=30,
         description="Unit of measurement (e.g. '%', 'USD', 'users', 'ms').",
     )
     is_controllable: bool = Field(
@@ -219,11 +224,13 @@ class Constraint(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'cnstr_margin').",
     )
     name: str = Field(
         ...,
         min_length=2,
+        max_length=100,
         description="Short label for the constraint.",
     )
     description: str = Field(
@@ -232,15 +239,17 @@ class Constraint(BaseModel):
         description="Statement of the constraint condition.",
     )
     is_hard_constraint: bool = Field(
-        default=True,
+        default=False,
         description="True if non-negotiable boundary; False if soft preference.",
     )
     threshold_expression: Optional[str] = Field(
         default=None,
+        max_length=100,
         description="Mathematical/logical bound for deterministic evaluation (e.g. 'gross_margin >= 0.65').",
     )
     source: str = Field(
         default="user_specified",
+        max_length=50,
         description="Origin of constraint ('user_specified', 'inferred_operational', 'regulatory').",
     )
     provenance: ProvenanceType = Field(
@@ -265,11 +274,13 @@ class Stakeholder(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'stk_customers').",
     )
     group: str = Field(
         ...,
         min_length=2,
+        max_length=100,
         description="Name of the stakeholder group or organizational role.",
     )
     impact_nature: str = Field(
@@ -294,6 +305,7 @@ class Tradeoff(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'trd_margin_vs_volume').",
     )
     upside: str = Field(
@@ -323,6 +335,7 @@ class Unknown(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'unk_competitor_reaction').",
     )
     question: str = Field(
@@ -351,6 +364,7 @@ class Assumption(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Unique identifier (e.g. 'asm_elasticity').",
     )
     statement: str = Field(
@@ -387,6 +401,7 @@ class DecisionModel(BaseModel):
     id: str = Field(
         ...,
         min_length=1,
+        max_length=64,
         description="Globally unique identifier for this decomposed decision model.",
     )
     decision: Decision = Field(

@@ -6,6 +6,7 @@ and typed error classes for language model operations.
 
 from app.services.llm.client import (
     DEFAULT_LLM_CONFIG,
+    FakeLLMClient,
     LLMAuthenticationError,
     LLMClient,
     LLMConfig,
@@ -31,6 +32,7 @@ __all__ = [
     "LLMClient",
     "LLMConfig",
     "MockLLMClient",
+    "FakeLLMClient",
     "GeminiLLMClient",
     "StructuredOutputParser",
     "parse_and_validate_structured_output",

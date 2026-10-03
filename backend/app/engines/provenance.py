@@ -232,15 +232,15 @@ def audit_decision_provenance(
             # Epistemic Rule: Inferred constraints must NEVER be represented as user-provided
             cnstr.source = "inferred_operational"
             cnstr.provenance = ProvenanceType.INFERRED
+            # Inferred business considerations without an explicit user-specified boundary
+            # must not be treated as hard constraints.
+            cnstr.is_hard_constraint = False
 
     # 4. Audit Variables & Numerical Hallucinations
     for var in model.variables:
         var_name_lower = var.name.lower()
-        # Variable identification provenance
-        if var_name_lower in user_corpus or any(part in user_corpus for part in var_name_lower.split() if len(part) > 3):
-            var.provenance = ProvenanceType.USER_PROVIDED
-        else:
-            var.provenance = ProvenanceType.INFERRED
+        is_user_baseline = False
+        is_user_proposed = False
 
         # --- Baseline Value Audit ---
         if var.baseline_value is not None:
@@ -325,6 +325,18 @@ def audit_decision_provenance(
                 var.proposed_provenance = ProvenanceType.INFERRED
         else:
             var.proposed_provenance = ProvenanceType.UNKNOWN
+
+        # Variable identification provenance:
+        # If proposed or baseline value was user-provided, or the variable was directly named in corpus
+        if (
+            is_user_proposed
+            or is_user_baseline
+            or var_name_lower in user_corpus
+            or any(part in user_corpus for part in var_name_lower.split() if len(part) > 3)
+        ):
+            var.provenance = ProvenanceType.USER_PROVIDED
+        else:
+            var.provenance = ProvenanceType.INFERRED
 
     # Append any created unknowns from stripped hallucinated baselines/metrics/thresholds
     if created_unknowns:

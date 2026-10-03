@@ -204,3 +204,78 @@ class MockLLMClient(LLMClient):
                 f"and model cannot be constructed with empty defaults: {e}",
                 details={"errors": e.errors()},
             ) from e
+
+
+class FakeLLMClient(LLMClient):
+    """Deterministic in-memory fake client for unit and integration testing.
+
+    Provides realistic, schema-valid generation without external API dependencies.
+    Preserves user numbers and prompt content when generating DecisionModel instances.
+    """
+
+    def __init__(self, default_response: Optional[BaseModel] = None) -> None:
+        self.default_response = default_response
+        self._canned_responses: Dict[Type[BaseModel], BaseModel] = {}
+        self._canned_error: Optional[Exception] = None
+        self.call_history: List[Dict[str, Any]] = []
+
+    def register_response(self, schema_cls: Type[T], response_instance: T) -> None:
+        """Registers a fixed response to return when schema_cls is requested."""
+        if not isinstance(response_instance, schema_cls):
+            raise ValueError(f"Instance must match registered schema {schema_cls.__name__}")
+        self._canned_responses[schema_cls] = response_instance
+
+    def register_error(self, error: Exception) -> None:
+        """Forces the next call to raise the specified exception."""
+        self._canned_error = error
+
+    def clear(self) -> None:
+        """Clears canned responses, errors, and history."""
+        self._canned_responses.clear()
+        self._canned_error = None
+        self.call_history.clear()
+
+    def generate_structured(
+        self,
+        prompt: str,
+        response_schema: Type[T],
+        system_instruction: Optional[str] = None,
+        config: Optional[LLMConfig] = None,
+    ) -> T:
+        cfg = config or DEFAULT_LLM_CONFIG
+
+        self.call_history.append({
+            "prompt": prompt,
+            "response_schema": response_schema,
+            "system_instruction": system_instruction,
+            "config": cfg,
+        })
+
+        if self._canned_error:
+            err = self._canned_error
+            self._canned_error = None
+            raise err
+
+        if response_schema in self._canned_responses:
+            return self._canned_responses[response_schema]  # type: ignore
+
+        if self.default_response and isinstance(self.default_response, response_schema):
+            return self.default_response  # type: ignore
+
+        # If requesting DecisionModel, construct a realistic default matching the prompt
+        from app.schemas.decision_model import DecisionModel
+        if issubclass(response_schema, DecisionModel):
+            from app.services.llm.mock_data import get_default_decision_model
+            question = prompt
+            if "Decision Question:\n" in prompt:
+                question = prompt.split("Decision Question:\n", 1)[1].split("\n\n", 1)[0].strip()
+            return get_default_decision_model(question=question)  # type: ignore
+
+        try:
+            return response_schema.model_validate({})
+        except ValidationError as e:
+            raise LLMResponseValidationError(
+                f"Fake client has no registered response for {response_schema.__name__} "
+                f"and model cannot be constructed with empty defaults: {e}",
+                details={"errors": e.errors()},
+            ) from e

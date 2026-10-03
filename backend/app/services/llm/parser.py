@@ -294,25 +294,26 @@ class StructuredOutputParser:
                         "id": f"cnstr_{idx + 1}",
                         "name": f"Constraint {idx + 1}",
                         "description": desc,
-                        "is_hard_constraint": True,
+                        "is_hard_constraint": is_user,
                         "source": "user_specified" if is_user else "inferred_operational",
                     })
                 elif isinstance(item, dict):
                     cnstr = dict(item)
                     if not cnstr.get("id"):
                         cnstr["id"] = f"cnstr_{idx + 1}"
-                    cnstr["is_hard_constraint"] = _safe_bool(cnstr.get("is_hard_constraint"), default=True)
 
                     # AI Epistemic Rule: Do not convert fabricated info into facts.
                     # Verify whether constraint truly came from user specifications.
                     desc = str(cnstr.get("description", "")).lower()
                     is_explicit_user = any(u in desc for u in user_constraint_texts) if user_constraint_texts else False
 
-                    # If not explicitly from user, enforce "inferred_operational" tag
-                    if not is_explicit_user and cnstr.get("source") == "user_specified":
+                    # If not explicitly from user, enforce "inferred_operational" tag and is_hard_constraint=False
+                    if not is_explicit_user:
                         cnstr["source"] = "inferred_operational"
-                    elif not cnstr.get("source"):
-                        cnstr["source"] = "user_specified" if is_explicit_user else "inferred_operational"
+                        cnstr["is_hard_constraint"] = False
+                    else:
+                        cnstr["source"] = "user_specified"
+                        cnstr["is_hard_constraint"] = _safe_bool(cnstr.get("is_hard_constraint"), default=True)
 
                     clean_cnstrs.append(cnstr)
             sanitized["constraints"] = clean_cnstrs
