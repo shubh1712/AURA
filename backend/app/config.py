@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.8-flash"
 
+    # Search / Brave configuration
+    BRAVE_SEARCH_API_KEY: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

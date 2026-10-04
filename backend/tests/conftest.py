@@ -93,7 +93,9 @@ def configure_test_llm_client(request: pytest.FixtureRequest) -> Generator[None,
 
     Opt-in tests marked with @pytest.mark.live_llm are permitted live external calls.
     """
-    is_live = bool(request.node.get_closest_marker("live_llm"))
+    is_live = bool(request.node.get_closest_marker("live_llm")) or bool(
+        request.node.get_closest_marker("live_search")
+    )
     set_live_calls_allowed(is_live)
 
     if is_live:

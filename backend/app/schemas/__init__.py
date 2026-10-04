@@ -20,8 +20,24 @@ from app.schemas.decision_model import (
     Variable,
     VariableType,
 )
+from app.schemas.evidence import (
+    ClaimEvidenceLink,
+    DecisionEntityType,
+    EvidenceGap,
+    EvidenceGapType,
+    EvidenceItem,
+    EvidenceKind,
+    EvidencePackage,
+    EvidenceRequirement,
+    EvidenceStance,
+    NumericEvidence,
+    RequirementStatus,
+    Source,
+    SourceType,
+)
 
 __all__ = [
+    # Day 1 & Day 2 Foundation & Decision Model
     "HealthResponse",
     "AnalysisRequest",
     "AnalysisResponse",
@@ -43,4 +59,18 @@ __all__ = [
     "VariableType",
     "CriticalityLevel",
     "ConfidenceLevel",
+    # Day 3 Evidence & Provenance
+    "SourceType",
+    "EvidenceKind",
+    "DecisionEntityType",
+    "EvidenceStance",
+    "EvidenceGapType",
+    "RequirementStatus",
+    "NumericEvidence",
+    "Source",
+    "EvidenceItem",
+    "ClaimEvidenceLink",
+    "EvidenceRequirement",
+    "EvidenceGap",
+    "EvidencePackage",
 ]

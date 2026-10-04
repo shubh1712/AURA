@@ -271,6 +271,24 @@ class FakeLLMClient(LLMClient):
                 question = prompt.split("Decision Question:\n", 1)[1].split("\n\n", 1)[0].strip()
             return get_default_decision_model(question=question)  # type: ignore
 
+        # If requesting CandidateRequirementsPayload, construct realistic candidate requirements
+        try:
+            from app.services.evidence.requirements import CandidateRequirementsPayload
+            if issubclass(response_schema, CandidateRequirementsPayload):
+                from app.services.evidence.requirements import get_default_candidate_requirements
+                return get_default_candidate_requirements()  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateEvidenceMappingPayload, construct realistic candidate findings
+        try:
+            from app.services.evidence.mapper import CandidateEvidenceMappingPayload
+            if issubclass(response_schema, CandidateEvidenceMappingPayload):
+                from app.services.evidence.mapper import get_default_candidate_findings
+                return get_default_candidate_findings(prompt)  # type: ignore
+        except ImportError:
+            pass
+
         try:
             return response_schema.model_validate({})
         except ValidationError as e:
