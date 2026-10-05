@@ -13,6 +13,7 @@ Guarantees:
 - Zero LLM dependencies and zero external network calls.
 """
 
+import time
 from typing import List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +22,7 @@ from app.services.evidence.search_provider import (
     SearchProvider,
     SearchProviderError,
     SearchResultItem,
+    SearchTimeoutError,
 )
 
 
@@ -74,6 +76,9 @@ class RequirementSearchResults(BaseModel):
 # 3. EvidenceRetriever Implementation
 # ------------------------------------------------------------------------------
 
+MAX_SEARCH_QUERIES_PER_ANALYSIS: int = 6
+
+
 class EvidenceRetriever:
     """Executes external-research queries through an injected SearchProvider."""
 
@@ -103,23 +108,32 @@ class EvidenceRetriever:
 
         self.search_provider = search_provider
         self.max_results_per_query = max_results_per_query
+        self.max_total_queries: int = MAX_SEARCH_QUERIES_PER_ANALYSIS
 
     def retrieve(
         self,
         requirements: List[EvidenceRequirement],
+        deadline_monotonic: Optional[float] = None,
     ) -> List[RequirementSearchResults]:
-        """Executes search queries for all EXTERNAL_RESEARCH requirements.
+        """Executes search queries for all EXTERNAL_RESEARCH requirements up to the analysis-wide budget.
+
+        Queries are evaluated in deterministic requirement and suggested_queries order.
+        If the number of executed queries reaches max_total_queries, remaining queries
+        are deterministically truncated without mutating requirement objects.
 
         Args:
             requirements: List of EvidenceRequirement objects to evaluate.
+            deadline_monotonic: Optional absolute monotonic deadline for the retrieval operation.
 
         Returns:
             List of RequirementSearchResults preserving requirement_id, query, and results.
 
         Raises:
+            SearchTimeoutError: If the deadline has expired before query execution.
             EvidenceRetrieverError: If SearchProvider fails during retrieval.
         """
         retrieval_records: List[RequirementSearchResults] = []
+        executed_query_count = 0
 
         for req in requirements:
             # Routing Policy: ONLY EXTERNAL_RESEARCH may invoke search
@@ -130,11 +144,18 @@ class EvidenceRetriever:
             if not req.suggested_queries:
                 continue
 
+            # Analysis-wide budget check
+            if executed_query_count >= self.max_total_queries:
+                break
+
             # Deduplication Strategy:
             # Avoid executing the exact same normalized query more than once for the SAME requirement.
             seen_norm_queries: Set[str] = set()
 
             for raw_query in req.suggested_queries:
+                if executed_query_count >= self.max_total_queries:
+                    break
+
                 if not raw_query or not raw_query.strip():
                     continue
 
@@ -146,17 +167,37 @@ class EvidenceRetriever:
                 # Clean query for search provider execution
                 clean_query = " ".join(raw_query.strip().split())
 
+                # Deadline and timeout enforcement
+                if deadline_monotonic is not None:
+                    remaining = deadline_monotonic - time.monotonic()
+                    if remaining <= 0:
+                        raise SearchTimeoutError("Search request timed out before query execution.")
+                    query_timeout = remaining
+                else:
+                    query_timeout = None
+
                 try:
                     search_results = self.search_provider.search(
                         query=clean_query,
                         max_results=self.max_results_per_query,
+                        timeout=query_timeout,
                     )
+                except TypeError as te:
+                    if "unexpected keyword argument 'timeout'" in str(te):
+                        search_results = self.search_provider.search(
+                            query=clean_query,
+                            max_results=self.max_results_per_query,
+                        )
+                    else:
+                        raise
                 except SearchProviderError as err:
                     raise EvidenceRetrieverError(
                         f"Search provider failure for requirement '{req.id}' and query '{clean_query}': {err}",
                         requirement_id=req.id,
                         query=clean_query,
                     ) from err
+
+                executed_query_count += 1
 
                 # Result Provenance & Empty Results:
                 # Preserve the record even if search_results is []

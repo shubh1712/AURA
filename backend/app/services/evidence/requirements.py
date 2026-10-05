@@ -13,6 +13,7 @@ Guarantees:
 - Employs dependency-injected LLMClient without making external network calls in tests.
 """
 
+import time
 from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +28,7 @@ from app.schemas.evidence import (
     EvidenceRequirement,
     RequirementStatus,
 )
-from app.services.llm.client import LLMClient
+from app.services.llm.client import LLMClient, LLMTimeoutError
 
 
 # ------------------------------------------------------------------------------
@@ -344,11 +345,13 @@ class EvidenceRequirementEngine:
     def generate_requirements(
         self,
         decision_model: DecisionModel,
+        deadline_monotonic: Optional[float] = None,
     ) -> List[EvidenceRequirement]:
         """Analyzes a DecisionModel and produces a deduplicated, validated list of EvidenceRequirement.
 
         Args:
             decision_model: The canonical DecisionModel to evaluate.
+            deadline_monotonic: Optional absolute monotonic deadline for the operation.
 
         Returns:
             List[EvidenceRequirement] with status=PENDING and strictly enforced query policies.
@@ -357,15 +360,29 @@ class EvidenceRequirementEngine:
             ValueError: If target entities are invalid or mismatched.
             LLMError: If upstream LLM generation fails.
         """
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before evidence requirements generation could begin.")
+
         # 1. Build prompt
         prompt = build_requirements_prompt(decision_model)
 
         # 2. Invoke structured generation
-        candidate_payload = self.llm_client.generate_structured(
-            prompt=prompt,
-            response_schema=CandidateRequirementsPayload,
-            system_instruction=REQUIREMENTS_SYSTEM_PROMPT,
-        )
+        try:
+            candidate_payload = self.llm_client.generate_structured(
+                prompt=prompt,
+                response_schema=CandidateRequirementsPayload,
+                system_instruction=REQUIREMENTS_SYSTEM_PROMPT,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except TypeError as te:
+            if "unexpected keyword argument 'deadline_monotonic'" in str(te):
+                candidate_payload = self.llm_client.generate_structured(
+                    prompt=prompt,
+                    response_schema=CandidateRequirementsPayload,
+                    system_instruction=REQUIREMENTS_SYSTEM_PROMPT,
+                )
+            else:
+                raise
 
         # 3. Policy enforcement, reference validation, and deduplication
         requirements: List[EvidenceRequirement] = []

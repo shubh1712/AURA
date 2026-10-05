@@ -10,6 +10,7 @@ Guarantees:
 - Epistemic provenance is preserved end-to-end.
 """
 
+import time
 from typing import Any, Dict, List, Optional
 from app.engines.complexity import (
     ComplexityConfig,
@@ -19,7 +20,7 @@ from app.engines.complexity import (
 )
 from app.engines.provenance import audit_decision_provenance
 from app.schemas.decision_model import DecisionModel
-from app.services.llm.client import LLMClient
+from app.services.llm.client import LLMClient, LLMTimeoutError
 from app.services.llm.prompts import (
     DECOMPOSITION_SYSTEM_PROMPT,
     build_decomposition_prompt,
@@ -48,6 +49,7 @@ class QuestionUnderstandingEngine:
         question: str,
         context: Optional[Dict[str, Any]] = None,
         constraints: Optional[List[str]] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> DecisionModel:
         """Deconstructs user inquiry into a provenance-audited DecisionModel.
 
@@ -55,10 +57,14 @@ class QuestionUnderstandingEngine:
             question: Verbatim decision question from the user.
             context: Optional background facts or metrics.
             constraints: Optional explicit boundaries.
+            deadline_monotonic: Optional absolute monotonic deadline for the operation.
 
         Returns:
             Fully instantiated, provenance-verified DecisionModel.
         """
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before DecisionModel deconstruction could begin.")
+
         # 1. Build prompt
         prompt = build_decomposition_prompt(
             question=question,
@@ -67,11 +73,22 @@ class QuestionUnderstandingEngine:
         )
 
         # 2. Invoke structured LLM generation
-        raw_model = self.llm_client.generate_structured(
-            prompt=prompt,
-            response_schema=DecisionModel,
-            system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
-        )
+        try:
+            raw_model = self.llm_client.generate_structured(
+                prompt=prompt,
+                response_schema=DecisionModel,
+                system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except TypeError as te:
+            if "unexpected keyword argument 'deadline_monotonic'" in str(te):
+                raw_model = self.llm_client.generate_structured(
+                    prompt=prompt,
+                    response_schema=DecisionModel,
+                    system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
+                )
+            else:
+                raise
 
         # 3. Preserve and verify provenance
         audited_model = audit_decision_provenance(

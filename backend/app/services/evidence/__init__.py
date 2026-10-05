@@ -5,11 +5,15 @@ from app.services.evidence.gaps import (
     EvidenceGapDetector,
 )
 from app.services.evidence.mapper import (
+    CandidateBatchEvidenceMappingPayload,
     CandidateEvidenceMappingPayload,
     CandidateFinding,
     CandidateNumericEvidence,
+    EVIDENCE_MAPPING_BATCH_SIZE,
     EvidenceMapper,
     EvidenceMappingResult,
+    MAX_SOURCE_TEXT_CHARS,
+    build_batch_mapping_prompt,
     build_mapping_prompt,
     get_default_candidate_findings,
 )
@@ -32,6 +36,7 @@ from app.services.evidence.brave_search import (
     BraveSearchProvider,
 )
 from app.services.evidence.retriever import (
+    MAX_SEARCH_QUERIES_PER_ANALYSIS,
     EvidenceRetriever,
     EvidenceRetrieverError,
     RequirementSearchResults,
@@ -76,6 +81,7 @@ __all__ = [
     "build_requirements_prompt",
     "validate_target_reference",
     # Evidence Retriever
+    "MAX_SEARCH_QUERIES_PER_ANALYSIS",
     "EvidenceRetriever",
     "EvidenceRetrieverError",
     "RequirementSearchResults",
@@ -89,8 +95,12 @@ __all__ = [
     "EvidenceMapper",
     "EvidenceMappingResult",
     "CandidateEvidenceMappingPayload",
+    "CandidateBatchEvidenceMappingPayload",
     "CandidateFinding",
     "CandidateNumericEvidence",
+    "EVIDENCE_MAPPING_BATCH_SIZE",
+    "MAX_SOURCE_TEXT_CHARS",
+    "build_batch_mapping_prompt",
     "build_mapping_prompt",
     "get_default_candidate_findings",
     # Evidence Gap Detector

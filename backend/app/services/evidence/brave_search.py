@@ -97,12 +97,14 @@ class BraveSearchProvider(SearchProvider):
         self,
         query: str,
         max_results: int = 5,
+        timeout: Optional[float] = None,
     ) -> List[SearchResultItem]:
         """Executes search query against Brave Web Search API.
 
         Args:
             query: Non-empty search query string.
             max_results: Maximum results to return (1..20 supported by Brave Web Search).
+            timeout: Optional maximum timeout in seconds for this request (clamped to self.timeout).
 
         Returns:
             List of SearchResultItem instances (up to max_results). Returns [] on 0 results.
@@ -136,17 +138,22 @@ class BraveSearchProvider(SearchProvider):
             "search_lang": self.search_lang,
         }
 
-        # 4. Execute HTTP request
+        # 4. Determine effective clamped timeout
+        effective_timeout = min(self.timeout, timeout) if timeout is not None else self.timeout
+        if effective_timeout <= 0:
+            raise SearchTimeoutError(f"Brave Search request timed out for query '{cleaned_query}'.")
+
+        # 5. Execute HTTP request
         try:
             if self._http_client is not None:
                 response = self._http_client.get(
                     self.api_endpoint,
                     headers=headers,
                     params=params,
-                    timeout=self.timeout,
+                    timeout=effective_timeout,
                 )
             else:
-                with httpx.Client(timeout=self.timeout) as client:
+                with httpx.Client(timeout=effective_timeout) as client:
                     response = client.get(
                         self.api_endpoint,
                         headers=headers,

@@ -50,6 +50,7 @@ class AnalysisRequest(BaseModel):
 
 
 from app.schemas.decision_model import DecisionModel
+from app.schemas.evidence import EvidencePackage
 
 
 class AnalysisResponse(BaseModel):
@@ -83,8 +84,18 @@ class AnalysisResponse(BaseModel):
                     "unknowns": [],
                     "key_questions": ["What is our latency budget?"],
                 },
+                "evidence_package": {
+                    "id": "evpkg_dec_sample",
+                    "decision_model_id": "dec_sample",
+                    "requirements": [],
+                    "sources": [],
+                    "items": [],
+                    "claim_links": [],
+                    "gaps": [],
+                    "summary": "0 evidence requirements.",
+                },
                 "question": "Should we migrate from a monolithic database to a distributed architecture?",
-                "message": "Decision deconstruction and provenance audit completed successfully.",
+                "message": "Decision deconstruction and evidence gathering completed successfully.",
             }
         },
     )
@@ -100,6 +111,10 @@ class AnalysisResponse(BaseModel):
     decision_model: Optional[DecisionModel] = Field(
         default=None,
         description="Canonical decomposed decision model with verified provenance and complexity.",
+    )
+    evidence_package: Optional[EvidencePackage] = Field(
+        default=None,
+        description="Empirical evidence package containing sources, findings, claim links, and gaps.",
     )
     question: str = Field(
         default="",

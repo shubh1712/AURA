@@ -1,4 +1,5 @@
 from typing import List, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,16 @@ class Settings(BaseSettings):
 
     # Search / Brave configuration
     BRAVE_SEARCH_API_KEY: Optional[str] = None
+
+    # Analysis execution configuration
+    ANALYSIS_TIMEOUT_SECONDS: float = 120.0
+
+    @field_validator("ANALYSIS_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_analysis_timeout(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("ANALYSIS_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",

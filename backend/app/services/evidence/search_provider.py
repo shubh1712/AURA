@@ -125,18 +125,21 @@ class SearchProvider(ABC):
         self,
         query: str,
         max_results: int = 5,
+        timeout: Optional[float] = None,
     ) -> List[SearchResultItem]:
         """Executes a search query and returns structured SearchResultItem objects.
 
         Args:
             query: Non-empty search query string.
             max_results: Positive integer maximum number of results to return.
+            timeout: Optional maximum timeout in seconds for this search query.
 
         Returns:
             List of SearchResultItem instances (up to max_results).
 
         Raises:
             ValueError: If query is empty or max_results <= 0.
+            SearchTimeoutError: If the search request times out.
             SearchProviderError: On provider communication failure.
         """
         pass
@@ -215,8 +218,12 @@ class FakeSearchProvider(SearchProvider):
         self,
         query: str,
         max_results: int = 5,
+        timeout: Optional[float] = None,
     ) -> List[SearchResultItem]:
         """Executes simulated search matching registered canned queries."""
+        if timeout is not None and timeout <= 0:
+            raise SearchTimeoutError(f"Fake search timed out before executing query '{query}'.")
+
         # 1. Validate parameters
         cleaned_query = self._validate_search_params(query, max_results)
 

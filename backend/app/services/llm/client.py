@@ -12,6 +12,7 @@ This layer has ZERO knowledge of:
 """
 
 from abc import ABC, abstractmethod
+import time
 from typing import Any, Dict, Generic, Optional, Type, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -87,7 +88,12 @@ class LLMConfig(BaseModel):
     timeout_seconds: float = Field(
         default=30.0,
         gt=0.0,
-        description="Maximum duration in seconds before terminating the request.",
+        description="Maximum duration in seconds before terminating an individual HTTP request.",
+    )
+    operation_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Maximum wall-clock duration in seconds for the entire generate_structured operation, across all attempts and backoffs.",
     )
     max_retries: int = Field(
         default=2,
@@ -113,6 +119,7 @@ class LLMClient(ABC):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         """Generates and validates a structured response matching response_schema.
 
@@ -121,6 +128,7 @@ class LLMClient(ABC):
             response_schema: Pydantic model class defining the expected output.
             system_instruction: Optional high-level system framing.
             config: Optional runtime overrides (temperature, timeout, etc.).
+            deadline_monotonic: Optional absolute monotonic deadline from a parent analysis.
 
         Returns:
             An instantiated, validated instance of response_schema (T).
@@ -173,6 +181,7 @@ class MockLLMClient(LLMClient):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
@@ -182,7 +191,14 @@ class MockLLMClient(LLMClient):
             "response_schema": response_schema,
             "system_instruction": system_instruction,
             "config": cfg,
+            "deadline_monotonic": deadline_monotonic,
         })
+
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError(
+                f"Mock client operation timed out against monotonic deadline {deadline_monotonic}.",
+                details={"deadline_monotonic": deadline_monotonic},
+            )
 
         # Simulate programmed errors
         if self._canned_error:
@@ -241,6 +257,7 @@ class FakeLLMClient(LLMClient):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
@@ -249,7 +266,14 @@ class FakeLLMClient(LLMClient):
             "response_schema": response_schema,
             "system_instruction": system_instruction,
             "config": cfg,
+            "deadline_monotonic": deadline_monotonic,
         })
+
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError(
+                f"Fake client operation timed out against monotonic deadline {deadline_monotonic}.",
+                details={"deadline_monotonic": deadline_monotonic},
+            )
 
         if self._canned_error:
             err = self._canned_error

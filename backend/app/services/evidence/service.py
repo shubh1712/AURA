@@ -13,6 +13,7 @@ Guarantees:
 """
 
 from datetime import datetime, timezone
+import time
 from typing import Dict, List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,9 +33,12 @@ from app.services.evidence.requirements import (
     EvidenceRequirementEngine,
     validate_target_reference,
 )
-from app.services.evidence.retriever import EvidenceRetriever
-from app.services.evidence.search_provider import SearchProvider
-from app.services.llm.client import LLMClient
+from app.services.evidence.retriever import (
+    MAX_SEARCH_QUERIES_PER_ANALYSIS,
+    EvidenceRetriever,
+)
+from app.services.evidence.search_provider import SearchProvider, SearchTimeoutError
+from app.services.llm.client import LLMClient, LLMTimeoutError
 
 
 # ------------------------------------------------------------------------------
@@ -134,11 +138,14 @@ class EvidenceService:
         cls,
         llm_client: LLMClient,
         search_provider: SearchProvider,
+        max_search_queries: int = MAX_SEARCH_QUERIES_PER_ANALYSIS,
     ) -> "EvidenceService":
         """Factory helper creating an EvidenceService wired with provided LLM and Search providers."""
+        retriever = EvidenceRetriever(search_provider=search_provider)
+        retriever.max_total_queries = max_search_queries
         return cls(
             requirement_engine=EvidenceRequirementEngine(llm_client=llm_client),
-            retriever=EvidenceRetriever(search_provider=search_provider),
+            retriever=retriever,
             normalizer=SourceNormalizer(),
             mapper=EvidenceMapper(llm_client=llm_client),
             gap_detector=EvidenceGapDetector(),
@@ -147,6 +154,7 @@ class EvidenceService:
     def build_evidence_package(
         self,
         decision_model: DecisionModel,
+        deadline_monotonic: Optional[float] = None,
     ) -> EvidencePackage:
         """Orchestrates evidence gathering and produces a validated EvidencePackage.
 
@@ -162,6 +170,7 @@ class EvidenceService:
 
         Args:
             decision_model: Canonical DecisionModel to evaluate.
+            deadline_monotonic: Optional absolute monotonic deadline for the evidence orchestration.
 
         Returns:
             Fully assembled, referentially validated EvidencePackage.
@@ -170,8 +179,14 @@ class EvidenceService:
             EvidenceServiceError: On unrecoverable failure at any pipeline stage.
         """
         # Stage 1: Requirement Generation
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before evidence requirements could begin.")
+
         try:
-            requirements = self.requirement_engine.generate_requirements(decision_model)
+            requirements = self.requirement_engine.generate_requirements(
+                decision_model,
+                deadline_monotonic=deadline_monotonic,
+            )
         except Exception as err:
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'requirement_generation': {err}",
@@ -179,8 +194,14 @@ class EvidenceService:
             ) from err
 
         # Stage 2: Retrieval
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise SearchTimeoutError("Operation timed out before evidence retrieval could begin.")
+
         try:
-            retrieval_results = self.retriever.retrieve(requirements)
+            retrieval_results = self.retriever.retrieve(
+                requirements,
+                deadline_monotonic=deadline_monotonic,
+            )
         except Exception as err:
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'retrieval': {err}",
@@ -188,6 +209,9 @@ class EvidenceService:
             ) from err
 
         # Stage 3: Normalization
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise SearchTimeoutError("Operation timed out before source normalization could begin.")
+
         try:
             normalized_sources = self.normalizer.normalize(retrieval_results)
         except Exception as err:
@@ -197,11 +221,15 @@ class EvidenceService:
             ) from err
 
         # Stage 4: Evidence Mapping
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before evidence mapping could begin.")
+
         try:
             mapping_result = self.mapper.map_evidence(
                 decision_model=decision_model,
                 requirements=requirements,
                 normalized_sources=normalized_sources,
+                deadline_monotonic=deadline_monotonic,
             )
         except Exception as err:
             raise EvidenceServiceError(
@@ -210,6 +238,9 @@ class EvidenceService:
             ) from err
 
         # Stage 5: Gap Detection & Status Resolution
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before gap detection could begin.")
+
         try:
             gap_result = self.gap_detector.detect_gaps(
                 decision_model=decision_model,
