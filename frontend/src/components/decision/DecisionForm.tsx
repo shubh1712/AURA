@@ -8,6 +8,7 @@ interface DecisionFormProps {
   isLoading: boolean;
   validationError: string | null;
   apiError: string | null;
+  apiErrorStatusCode?: number | null;
   onFieldChange: (field: keyof DecisionFormData, value: string) => void;
   onSubmit: (e: React.FormEvent) => void;
   onReset: () => void;
@@ -19,6 +20,7 @@ export function DecisionForm({
   isLoading,
   validationError,
   apiError,
+  apiErrorStatusCode,
   onFieldChange,
   onSubmit,
   onReset,
@@ -58,9 +60,14 @@ export function DecisionForm({
           className="rounded-lg border border-red-800/50 bg-red-950/30 p-4 text-xs text-red-200 space-y-1.5"
         >
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-red-300">
-              Analysis Error
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-red-300">Analysis Error</span>
+              {apiErrorStatusCode && (
+                <span className="rounded bg-red-900/60 px-1.5 py-0.5 text-[10px] font-mono font-medium text-red-200 border border-red-800/60">
+                  HTTP {apiErrorStatusCode}
+                </span>
+              )}
+            </div>
             <button
               type="button"
               onClick={onClearError}
@@ -192,6 +199,24 @@ export function DecisionForm({
           Calls FastAPI <code className="text-zinc-400">/api/analyze</code>
         </span>
       </div>
+
+      {/* Truthful Loading State Callout */}
+      {isLoading && (
+        <div
+          role="status"
+          className="rounded-xl border border-zinc-800/90 bg-zinc-950/70 p-4 text-xs text-zinc-300 flex items-start gap-3"
+        >
+          <span className="flex h-2 w-2 rounded-full bg-indigo-400 mt-1 shrink-0 animate-ping" />
+          <div className="space-y-1">
+            <p className="font-medium text-zinc-200">
+              AURA is structuring the decision and gathering relevant evidence.
+            </p>
+            <p className="text-zinc-400 leading-relaxed font-sans">
+              This analysis performs multi-source research and factual evidence mapping; it may take a little while.
+            </p>
+          </div>
+        </div>
+      )}
     </form>
   );
 }

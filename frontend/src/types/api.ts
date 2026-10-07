@@ -2,6 +2,9 @@
  * API Contracts matching the AURA FastAPI backend.
  */
 
+import type { DecisionModel } from "./decision";
+import type { EvidencePackage } from "./evidence";
+
 export interface AnalysisRequest {
   question: string;
   context?: Record<string, unknown> | null;
@@ -13,7 +16,8 @@ export interface AnalysisResponse {
   status: string;
   question: string;
   message: string;
-  decision_model?: Record<string, unknown> | null;
+  decision_model?: DecisionModel | null;
+  evidence_package?: EvidencePackage | null;
 }
 
 export interface HealthResponse {

@@ -13,6 +13,7 @@ export default function AuraPage() {
     isLoading,
     validationError,
     apiError,
+    apiErrorStatusCode,
     apiResponse,
     updateField,
     reset,
@@ -31,7 +32,7 @@ export default function AuraPage() {
       <Header />
 
       {/* Main Workspace Area */}
-      <main className="flex-1 w-full max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
+      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
         {/* 1 & 2: AURA Logo/Name & Short Description */}
         <DecisionHero />
 
@@ -42,6 +43,7 @@ export default function AuraPage() {
             isLoading={isLoading}
             validationError={validationError}
             apiError={apiError}
+            apiErrorStatusCode={apiErrorStatusCode}
             onFieldChange={updateField}
             onSubmit={handleSubmit}
             onReset={reset}
