@@ -12,6 +12,7 @@ This layer has ZERO knowledge of:
 """
 
 from abc import ABC, abstractmethod
+import threading
 import time
 from typing import Any, Dict, Generic, Optional, Type, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -86,7 +87,7 @@ class LLMConfig(BaseModel):
         description="Maximum tokens allowed in generation.",
     )
     timeout_seconds: float = Field(
-        default=30.0,
+        default=45.0,
         gt=0.0,
         description="Maximum duration in seconds before terminating an individual HTTP request.",
     )
@@ -158,22 +159,26 @@ class MockLLMClient(LLMClient):
         self._canned_responses: Dict[Type[BaseModel], BaseModel] = {}
         self._canned_error: Optional[Exception] = None
         self.call_history: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def register_response(self, schema_cls: Type[T], response_instance: T) -> None:
         """Registers a fixed response to return when schema_cls is requested."""
         if not isinstance(response_instance, schema_cls):
             raise ValueError(f"Instance must match registered schema {schema_cls.__name__}")
-        self._canned_responses[schema_cls] = response_instance
+        with self._lock:
+            self._canned_responses[schema_cls] = response_instance
 
     def register_error(self, error: Exception) -> None:
         """Forces the next call to raise the specified exception."""
-        self._canned_error = error
+        with self._lock:
+            self._canned_error = error
 
     def clear(self) -> None:
         """Clears canned responses, errors, and history."""
-        self._canned_responses.clear()
-        self._canned_error = None
-        self.call_history.clear()
+        with self._lock:
+            self._canned_responses.clear()
+            self._canned_error = None
+            self.call_history.clear()
 
     def generate_structured(
         self,
@@ -186,13 +191,14 @@ class MockLLMClient(LLMClient):
         cfg = config or DEFAULT_LLM_CONFIG
 
         # Record call telemetry
-        self.call_history.append({
-            "prompt": prompt,
-            "response_schema": response_schema,
-            "system_instruction": system_instruction,
-            "config": cfg,
-            "deadline_monotonic": deadline_monotonic,
-        })
+        with self._lock:
+            self.call_history.append({
+                "prompt": prompt,
+                "response_schema": response_schema,
+                "system_instruction": system_instruction,
+                "config": cfg,
+                "deadline_monotonic": deadline_monotonic,
+            })
 
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError(

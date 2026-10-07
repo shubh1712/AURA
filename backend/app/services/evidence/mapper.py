@@ -15,11 +15,15 @@ Guarantees:
 - Zero external network calls; operates with FakeLLMClient in automated tests.
 """
 
+import concurrent.futures
 from datetime import datetime, timezone
+import logging
 import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.decision_model import ConfidenceLevel, DecisionModel
 from app.schemas.evidence import (
@@ -41,6 +45,8 @@ from app.services.llm.client import LLMClient, LLMTimeoutError
 
 EVIDENCE_MAPPING_BATCH_SIZE: int = 5
 MAX_SOURCE_TEXT_CHARS: int = 4000
+MAX_EVIDENCE_MAPPING_BATCHES: int = 6
+MAX_EVIDENCE_MAPPING_WORKERS: int = 3
 
 
 class CandidateNumericEvidence(BaseModel):
@@ -541,6 +547,8 @@ class EvidenceMapper:
         self.llm_client = llm_client
         self.batch_size = max(1, EVIDENCE_MAPPING_BATCH_SIZE)
         self.max_source_text_chars = max(100, MAX_SOURCE_TEXT_CHARS)
+        self.max_batches = max(1, MAX_EVIDENCE_MAPPING_BATCHES)
+        self.max_workers = max(1, MAX_EVIDENCE_MAPPING_WORKERS)
 
     def map_evidence(
         self,
@@ -562,11 +570,14 @@ class EvidenceMapper:
 
         Raises:
             ValueError: If an unknown requirement_id is encountered or target entity does not exist.
-            LLMTimeoutError: If the deadline expires before a batch begins.
+            LLMTimeoutError: If the deadline expires before a batch begins or during processing.
             LLMError: If structured output generation fails.
         """
         if not normalized_sources:
             return EvidenceMappingResult(items=[], claim_links=[])
+
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError("Operation timed out before evidence mapping could begin.")
 
         req_map: Dict[str, EvidenceRequirement] = {r.id: r for r in requirements}
         target_info = _extract_target_entity_info(decision_model)
@@ -578,36 +589,45 @@ class EvidenceMapper:
         item_counter = 1
         link_counter = 1
 
-        # Partition sources into deterministic sequential batches
-        batches = [
+        # 1. Partition sources into deterministic sequential batches
+        all_batches = [
             normalized_sources[i : i + self.batch_size]
             for i in range(0, len(normalized_sources), self.batch_size)
         ]
 
-        for batch in batches:
-            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                raise LLMTimeoutError("Operation timed out before evidence mapping batch could begin.")
+        # 2. Apply deterministic mapping-work budget
+        batches = all_batches[: self.max_batches]
+        if len(all_batches) > self.max_batches:
+            logger.info(
+                "Evidence mapping work capped by budget: scheduled %d of %d batches (%d sources).",
+                len(batches),
+                len(all_batches),
+                len(normalized_sources),
+            )
 
+        # 3. Deterministically prepare items and prompts for scheduled batches
+        batch_prepared: List[Tuple[int, List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = []
+        for i, batch in enumerate(batches):
             batch_items: List[Dict[str, Any]] = []
             batch_source_map: Dict[str, Dict[str, Any]] = {}
             local_idx = 1
 
             for norm_res in batch:
-                # 1. Validate requirement reference
+                # 3a. Validate requirement reference
                 if norm_res.requirement_id not in req_map:
                     raise ValueError(
                         f"NormalizedSourceResult references unknown requirement_id '{norm_res.requirement_id}'."
                     )
                 req = req_map[norm_res.requirement_id]
 
-                # 2. Validate target entity reference in DecisionModel
+                # 3b. Validate target entity reference in DecisionModel
                 validate_target_reference(
                     decision_model=decision_model,
                     target_id=req.target_entity_id,
                     target_type=req.target_entity_type,
                 )
 
-                # 3. Determine grounding text (prefer raw_content over snippet)
+                # 3c. Determine grounding text (prefer raw_content over snippet)
                 if not norm_res.search_result:
                     continue
 
@@ -617,8 +637,8 @@ class EvidenceMapper:
                 if not source_text:
                     continue
 
-                # 4. Deterministic token ceiling applied before prompt construction
-                bounded_text = source_text[:self.max_source_text_chars]
+                # 3d. Deterministic token ceiling applied before prompt construction
+                bounded_text = source_text[: self.max_source_text_chars]
 
                 s_ref = f"SOURCE_{local_idx}"
                 local_idx += 1
@@ -633,12 +653,17 @@ class EvidenceMapper:
                 batch_items.append(meta)
                 batch_source_map[s_ref] = meta
 
-            if not batch_items:
-                continue
+            batch_prepared.append((i, batch_items, batch_source_map))
 
-            # 5. Build batched prompt and invoke LLM
-            prompt = build_batch_mapping_prompt(batch_items)
+        # 4. Invoke LLM for each batch (single-worker or single-batch runs sequentially; multiple run concurrently)
+        def _invoke_batch(idx: int, items: List[Dict[str, Any]]) -> Tuple[int, CandidateBatchEvidenceMappingPayload]:
+            if not items:
+                return idx, CandidateBatchEvidenceMappingPayload(findings=[])
 
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise LLMTimeoutError("Operation timed out before evidence mapping batch could begin.")
+
+            prompt = build_batch_mapping_prompt(items)
             try:
                 payload = self.llm_client.generate_structured(
                     prompt=prompt,
@@ -655,14 +680,69 @@ class EvidenceMapper:
                     )
                 else:
                     raise
+            return idx, payload
 
-            # 6. Process candidate findings
+        batch_results: Dict[int, CandidateBatchEvidenceMappingPayload] = {}
+        non_empty_batches = [(idx, items) for idx, items, _ in batch_prepared if items]
+
+        if len(non_empty_batches) <= 1 or self.max_workers <= 1:
+            # Sequential execution path (zero thread-pool overhead for single batch or max_workers=1)
+            for idx, items, _ in batch_prepared:
+                _, payload = _invoke_batch(idx, items)
+                batch_results[idx] = payload
+        else:
+            # Bounded concurrent execution path
+            worker_count = min(self.max_workers, len(non_empty_batches))
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
+            futures: Dict[concurrent.futures.Future, int] = {}
+            try:
+                for idx, items, _ in batch_prepared:
+                    fut = executor.submit(_invoke_batch, idx, items)
+                    futures[fut] = idx
+
+                # Respect parent monotonic deadline while waiting
+                remaining = (
+                    max(0.0, deadline_monotonic - time.monotonic())
+                    if deadline_monotonic is not None
+                    else None
+                )
+                done, not_done = concurrent.futures.wait(
+                    futures.keys(),
+                    timeout=remaining,
+                    return_when=concurrent.futures.ALL_COMPLETED,
+                )
+            finally:
+                # Cancel queued futures that haven't started; do not block indefinitely on worker completion
+                executor.shutdown(wait=False, cancel_futures=True)
+
+            # Deterministic failure inspection in original batch index order
+            # If any batch timed out or deadline expired, handle with deterministic priority
+            if not_done or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
+                # Check if an earlier batch already failed with an explicit error before timing out
+                for idx in range(len(batch_prepared)):
+                    fut = next(f for f, i in futures.items() if i == idx)
+                    if fut in done and fut.exception() is not None:
+                        raise fut.exception()
+                    if fut in not_done:
+                        break
+                raise LLMTimeoutError("Operation timed out during evidence mapping.")
+
+            # All completed: check exceptions strictly by original batch index order
+            for idx in range(len(batch_prepared)):
+                fut = next(f for f, i in futures.items() if i == idx)
+                exc = fut.exception()
+                if exc is not None:
+                    raise exc
+                _, payload = fut.result()
+                batch_results[idx] = payload
+
+        # 5. Deterministic sequential merging and ID assignment in original batch index order
+        for i, batch_items, batch_source_map in batch_prepared:
+            payload = batch_results.get(i) or CandidateBatchEvidenceMappingPayload(findings=[])
             findings = getattr(payload, "findings", []) or []
             for finding in findings:
-                # Strict source_ref resolution
                 s_ref = finding.source_ref
                 if not s_ref or s_ref not in batch_source_map:
-                    # Drop candidate whose source_ref is invalid or outside the current batch
                     continue
 
                 source_meta = batch_source_map[s_ref]

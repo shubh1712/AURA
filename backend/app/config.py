@@ -17,9 +17,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
-    # LLM / Gemini configuration
-    GEMINI_API_KEY: Optional[str] = None
+    # LLM / Gemini configuration (Google Cloud Vertex AI)
     GEMINI_MODEL: str = "gemini-3.8-flash"
+    GOOGLE_CLOUD_PROJECT: Optional[str] = None
+    GOOGLE_CLOUD_LOCATION: str = "global"
 
     # Search / Brave configuration
     BRAVE_SEARCH_API_KEY: Optional[str] = None

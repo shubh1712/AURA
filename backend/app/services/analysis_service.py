@@ -74,11 +74,9 @@ class AnalysisService:
         """Returns the default LLMClient instance."""
         if cls._client_factory is not None:
             return cls._client_factory()
-        import os
         from app.services.llm.gemini import GeminiLLMClient
 
-        api_key = (settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")).strip()
-        return GeminiLLMClient(api_key=api_key)
+        return GeminiLLMClient()
 
     def __init__(
         self,

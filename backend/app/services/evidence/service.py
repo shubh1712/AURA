@@ -27,7 +27,11 @@ from app.schemas.evidence import (
     Source,
 )
 from app.services.evidence.gaps import EvidenceGapDetector
-from app.services.evidence.mapper import EvidenceMapper
+from app.services.evidence.mapper import (
+    MAX_EVIDENCE_MAPPING_BATCHES,
+    MAX_EVIDENCE_MAPPING_WORKERS,
+    EvidenceMapper,
+)
 from app.services.evidence.normalizer import SourceNormalizer
 from app.services.evidence.requirements import (
     EvidenceRequirementEngine,
@@ -139,15 +143,20 @@ class EvidenceService:
         llm_client: LLMClient,
         search_provider: SearchProvider,
         max_search_queries: int = MAX_SEARCH_QUERIES_PER_ANALYSIS,
+        max_mapping_workers: int = MAX_EVIDENCE_MAPPING_WORKERS,
+        max_mapping_batches: int = MAX_EVIDENCE_MAPPING_BATCHES,
     ) -> "EvidenceService":
         """Factory helper creating an EvidenceService wired with provided LLM and Search providers."""
         retriever = EvidenceRetriever(search_provider=search_provider)
         retriever.max_total_queries = max_search_queries
+        mapper = EvidenceMapper(llm_client=llm_client)
+        mapper.max_workers = max_mapping_workers
+        mapper.max_batches = max_mapping_batches
         return cls(
             requirement_engine=EvidenceRequirementEngine(llm_client=llm_client),
             retriever=retriever,
             normalizer=SourceNormalizer(),
-            mapper=EvidenceMapper(llm_client=llm_client),
+            mapper=mapper,
             gap_detector=EvidenceGapDetector(),
         )
 
