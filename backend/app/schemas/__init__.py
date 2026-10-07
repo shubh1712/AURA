@@ -35,6 +35,22 @@ from app.schemas.evidence import (
     Source,
     SourceType,
 )
+from app.schemas.reasoning import (
+    ArgumentDirection,
+    BoardSynthesis,
+    CandidateBoardSynthesis,
+    CandidateDisagreement,
+    CandidatePerspectiveAnalysis,
+    CandidateReasoningArgument,
+    DisagreementNature,
+    PerspectiveType,
+    ReasoningArgument,
+    ReasoningBasis,
+    ReasoningBoard,
+    ReasoningDisagreement,
+    ReasoningPerspective,
+    validate_reasoning_references,
+)
 
 __all__ = [
     # Day 1 & Day 2 Foundation & Decision Model
@@ -73,4 +89,19 @@ __all__ = [
     "EvidenceRequirement",
     "EvidenceGap",
     "EvidencePackage",
+    # Day 4 Reasoning Board
+    "PerspectiveType",
+    "ReasoningBasis",
+    "ArgumentDirection",
+    "DisagreementNature",
+    "ReasoningArgument",
+    "ReasoningPerspective",
+    "ReasoningDisagreement",
+    "BoardSynthesis",
+    "ReasoningBoard",
+    "validate_reasoning_references",
+    "CandidateReasoningArgument",
+    "CandidatePerspectiveAnalysis",
+    "CandidateDisagreement",
+    "CandidateBoardSynthesis",
 ]

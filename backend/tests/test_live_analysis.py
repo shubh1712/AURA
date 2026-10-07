@@ -431,7 +431,6 @@ def test_live_telemetry_recorder_interval_union() -> None:
 
 def test_live_telemetry_recorder_concurrency() -> None:
     """Offline test verifying LiveTelemetryRecorder assigns unique call IDs concurrently."""
-    import random
     from pydantic import BaseModel
 
     class DummySchemaA(BaseModel):
@@ -449,12 +448,13 @@ def test_live_telemetry_recorder_concurrency() -> None:
 
     mock_llm = MockLLM()
 
+    barrier = threading.Barrier(4)
+
     def mock_generate_structured(prompt: str, response_schema: Any, **kwargs: Any) -> Any:
-        # Simulate varying thread runtime and slight interleaving
-        call_sleep = random.uniform(0.005, 0.02)
-        time.sleep(call_sleep)
+        # Deterministically synchronize concurrent worker threads via barrier
+        barrier.wait(timeout=5.0)
         thread_local.diag = {
-            "call_duration_seconds": call_sleep,
+            "call_duration_seconds": 0.01,
             "attempt": 1,
             "status": "success",
             "model": "mock-model",
@@ -497,7 +497,8 @@ def test_live_telemetry_recorder_concurrency() -> None:
         assert isinstance(record["end_timestamp"], float)
         assert record["end_timestamp"] >= record["start_timestamp"]
         assert "duration" in record
-        assert record["duration"] >= 0.004
+        assert record["duration"] >= 0.0
+        assert record["end_timestamp"] == pytest.approx(record["start_timestamp"] + record["duration"])
         assert record["success"] is True
         assert record["diagnostic"] is not None
         assert record["diagnostic"]["status"] == "success"
