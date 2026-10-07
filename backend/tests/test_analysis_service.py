@@ -9,6 +9,7 @@ from app.engines.question_understanding import QuestionUnderstandingEngine
 from app.main import app
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.decision_model import DecisionModel
+from app.schemas.evidence import EvidencePackage
 from app.services.analysis_service import AnalysisService, get_analysis_service
 from app.services.llm.client import (
     LLMAuthenticationError,
@@ -62,8 +63,8 @@ def test_get_analysis_service_provider() -> None:
     assert isinstance(provider_instance, AnalysisService)
 
 
-def test_analysis_service_llm_auth_error_raises_503() -> None:
-    """Verifies that an LLMAuthenticationError raises 503 Service Unavailable."""
+def test_analysis_service_llm_auth_error_raises_503(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies that an LLMAuthenticationError raises 503 Service Unavailable and never leaks credentials in detail or logs."""
     mock_llm = MockLLMClient()
     mock_llm.register_error(LLMAuthenticationError("Secret API key invalid: AIzaSyD-fake-key"))
     engine = QuestionUnderstandingEngine(llm_client=mock_llm)
@@ -74,15 +75,16 @@ def test_analysis_service_llm_auth_error_raises_503() -> None:
         service.analyze(req)
 
     assert exc_info.value.status_code == 503
-    # Critical security rule: never leak the key in the detail
+    # Critical security rule: never leak the key in the detail or logs
     assert "AIzaSyD-fake-key" not in exc_info.value.detail
+    assert "AIzaSyD-fake-key" not in caplog.text
     assert "authentication failed or credentials not configured" in exc_info.value.detail
 
 
-def test_analysis_service_rate_limit_raises_429() -> None:
+def test_analysis_service_rate_limit_raises_429(caplog: pytest.LogCaptureFixture) -> None:
     """Verifies that an LLMRateLimitError raises 429 Too Many Requests."""
     mock_llm = MockLLMClient()
-    mock_llm.register_error(LLMRateLimitError("Quota exceeded for quota metric"))
+    mock_llm.register_error(LLMRateLimitError("Quota exceeded for quota metric: SECRET_QUOTA_123"))
     engine = QuestionUnderstandingEngine(llm_client=mock_llm)
     service = AnalysisService(engine=engine)
 
@@ -92,12 +94,14 @@ def test_analysis_service_rate_limit_raises_429() -> None:
 
     assert exc_info.value.status_code == 429
     assert "rate limit or quota exceeded" in exc_info.value.detail
+    assert "SECRET_QUOTA_123" not in exc_info.value.detail
+    assert "SECRET_QUOTA_123" not in caplog.text
 
 
-def test_analysis_service_timeout_raises_504() -> None:
+def test_analysis_service_timeout_raises_504(caplog: pytest.LogCaptureFixture) -> None:
     """Verifies that an LLMTimeoutError raises 504 Gateway Timeout."""
     mock_llm = MockLLMClient()
-    mock_llm.register_error(LLMTimeoutError("Request timed out after 30s"))
+    mock_llm.register_error(LLMTimeoutError("Request timed out after 30s: SECRET_TIMEOUT_INFO"))
     engine = QuestionUnderstandingEngine(llm_client=mock_llm)
     service = AnalysisService(engine=engine)
 
@@ -107,12 +111,14 @@ def test_analysis_service_timeout_raises_504() -> None:
 
     assert exc_info.value.status_code == 504
     assert "timed out" in exc_info.value.detail
+    assert "SECRET_TIMEOUT_INFO" not in exc_info.value.detail
+    assert "SECRET_TIMEOUT_INFO" not in caplog.text
 
 
-def test_analysis_service_response_validation_error_raises_502() -> None:
+def test_analysis_service_response_validation_error_raises_502(caplog: pytest.LogCaptureFixture) -> None:
     """Verifies that an LLMResponseValidationError raises 502 Bad Gateway."""
     mock_llm = MockLLMClient()
-    mock_llm.register_error(LLMResponseValidationError("Missing required objectives"))
+    mock_llm.register_error(LLMResponseValidationError("Missing required objectives: SECRET_VALIDATION_TRACE"))
     engine = QuestionUnderstandingEngine(llm_client=mock_llm)
     service = AnalysisService(engine=engine)
 
@@ -122,12 +128,14 @@ def test_analysis_service_response_validation_error_raises_502() -> None:
 
     assert exc_info.value.status_code == 502
     assert "unparseable response structure" in exc_info.value.detail
+    assert "SECRET_VALIDATION_TRACE" not in exc_info.value.detail
+    assert "SECRET_VALIDATION_TRACE" not in caplog.text
 
 
-def test_analysis_service_unexpected_error_raises_500() -> None:
+def test_analysis_service_unexpected_error_raises_500(caplog: pytest.LogCaptureFixture) -> None:
     """Verifies that an unhandled general exception raises 500 Internal Server Error."""
     mock_llm = MockLLMClient()
-    mock_llm.register_error(RuntimeError("Unexpected memory corruption"))
+    mock_llm.register_error(RuntimeError("Unexpected memory corruption: SECRET_INTERNAL_DUMP"))
     engine = QuestionUnderstandingEngine(llm_client=mock_llm)
     service = AnalysisService(engine=engine)
 
@@ -137,6 +145,142 @@ def test_analysis_service_unexpected_error_raises_500() -> None:
 
     assert exc_info.value.status_code == 500
     assert "unexpected internal error" in exc_info.value.detail
+    assert "SECRET_INTERNAL_DUMP" not in exc_info.value.detail
+    assert "SECRET_INTERNAL_DUMP" not in caplog.text
+
+
+# ------------------------------------------------------------------------------
+# Security Tests: Secret Marker Redaction in Logs and HTTP Detail
+# ------------------------------------------------------------------------------
+
+SECRET_MARKER = "SUPER_SECRET_PROVIDER_MARKER_123"
+
+
+def test_security_llm_provider_error_redaction(caplog: pytest.LogCaptureFixture) -> None:
+    """Proves SUPER_SECRET_PROVIDER_MARKER_123 in LLMProviderError never appears in logs or HTTP detail."""
+    mock_llm = MockLLMClient()
+    mock_llm.register_error(LLMProviderError(f"503 Service Unavailable: upstream payload {SECRET_MARKER}"))
+    service = AnalysisService(engine=QuestionUnderstandingEngine(llm_client=mock_llm))
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.analyze(AnalysisRequest(question="Should we expand?"))
+
+    assert exc_info.value.status_code == 502
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_info.value.detail
+
+
+def test_security_search_errors_redaction(caplog: pytest.LogCaptureFixture) -> None:
+    """Proves SUPER_SECRET_PROVIDER_MARKER_123 in SearchProvider errors never appears in logs or HTTP detail."""
+    from app.services.evidence import (
+        EvidenceService,
+        EvidenceServiceError,
+        SearchAuthenticationError,
+        SearchRateLimitError,
+        SearchTimeoutError,
+        SearchNetworkError,
+        SearchProviderError,
+    )
+    from app.services.evidence.search_provider import FakeSearchProvider
+    from app.services.llm.client import FakeLLMClient
+
+    # 1. Search Auth -> 503
+    class SecretAuthSearchProvider(FakeSearchProvider):
+        def search(self, query: str, max_results: int = 5) -> list:
+            raise SearchAuthenticationError(f"Bad key: {SECRET_MARKER}")
+
+    fake_llm = FakeLLMClient()
+    svc_auth = AnalysisService(
+        llm_client=fake_llm,
+        evidence_service=EvidenceService.create_default(fake_llm, SecretAuthSearchProvider()),
+    )
+    with pytest.raises(HTTPException) as exc_auth:
+        svc_auth.analyze(AnalysisRequest(question="Test question?"))
+    assert exc_auth.value.status_code == 503
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_auth.value.detail
+
+    caplog.clear()
+
+    # 2. Search Rate Limit -> 429
+    class SecretRateLimitSearchProvider(FakeSearchProvider):
+        def search(self, query: str, max_results: int = 5) -> list:
+            raise SearchRateLimitError(f"Rate limited: {SECRET_MARKER}")
+
+    svc_rate = AnalysisService(
+        llm_client=fake_llm,
+        evidence_service=EvidenceService.create_default(fake_llm, SecretRateLimitSearchProvider()),
+    )
+    with pytest.raises(HTTPException) as exc_rate:
+        svc_rate.analyze(AnalysisRequest(question="Test question?"))
+    assert exc_rate.value.status_code == 429
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_rate.value.detail
+
+    caplog.clear()
+
+    # 3. Search Timeout -> 504
+    class SecretTimeoutSearchProvider(FakeSearchProvider):
+        def search(self, query: str, max_results: int = 5) -> list:
+            raise SearchTimeoutError(f"Timed out: {SECRET_MARKER}")
+
+    svc_timeout = AnalysisService(
+        llm_client=fake_llm,
+        evidence_service=EvidenceService.create_default(fake_llm, SecretTimeoutSearchProvider()),
+    )
+    with pytest.raises(HTTPException) as exc_timeout:
+        svc_timeout.analyze(AnalysisRequest(question="Test question?"))
+    assert exc_timeout.value.status_code == 504
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_timeout.value.detail
+
+    caplog.clear()
+
+    # 4. Search Network / Response / Provider -> 502
+    class SecretNetworkSearchProvider(FakeSearchProvider):
+        def search(self, query: str, max_results: int = 5) -> list:
+            raise SearchNetworkError(f"Connection failed: {SECRET_MARKER}")
+
+    svc_net = AnalysisService(
+        llm_client=fake_llm,
+        evidence_service=EvidenceService.create_default(fake_llm, SecretNetworkSearchProvider()),
+    )
+    with pytest.raises(HTTPException) as exc_net:
+        svc_net.analyze(AnalysisRequest(question="Test question?"))
+    assert exc_net.value.status_code == 502
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_net.value.detail
+
+    caplog.clear()
+
+    # 5. Wrapped EvidenceServiceError -> 502
+    class SecretGenericEvidenceService(EvidenceService):
+        def build_evidence_package(self, decision_model: DecisionModel) -> EvidencePackage:
+            raise EvidenceServiceError(f"Internal crash with sensitive dump: {SECRET_MARKER}")
+
+    svc_ev = AnalysisService(
+        llm_client=fake_llm,
+        evidence_service=SecretGenericEvidenceService(None, None, None, None, None),  # type: ignore
+    )
+    with pytest.raises(HTTPException) as exc_ev:
+        svc_ev.analyze(AnalysisRequest(question="Test question?"))
+    assert exc_ev.value.status_code == 502
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_ev.value.detail
+
+
+def test_security_generic_unexpected_error_redaction(caplog: pytest.LogCaptureFixture) -> None:
+    """Proves SUPER_SECRET_PROVIDER_MARKER_123 in unexpected general exceptions never appears in logs or detail."""
+    mock_llm = MockLLMClient()
+    mock_llm.register_error(RuntimeError(f"Unexpected low-level failure: {SECRET_MARKER}"))
+    service = AnalysisService(engine=QuestionUnderstandingEngine(llm_client=mock_llm))
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.analyze(AnalysisRequest(question="Test question?"))
+
+    assert exc_info.value.status_code == 500
+    assert SECRET_MARKER not in caplog.text
+    assert SECRET_MARKER not in exc_info.value.detail
 
 
 def test_route_integration_error_handling(client: TestClient) -> None:

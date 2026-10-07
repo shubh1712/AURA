@@ -33,7 +33,8 @@ def test_llm_config_defaults() -> None:
     cfg = LLMConfig()
     assert cfg.model_name == "gemini-3.8-flash"
     assert cfg.temperature == 0.2
-    assert cfg.timeout_seconds == 30.0
+    assert cfg.timeout_seconds == 45.0
+    assert cfg.operation_timeout_seconds == 60.0
     assert cfg.max_retries == 2
 
 

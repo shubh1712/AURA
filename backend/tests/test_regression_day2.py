@@ -175,7 +175,8 @@ def test_regression_tests_pass_without_gemini_api_key(
     """Regression 9E: Normal tests pass when GEMINI_API_KEY is completely absent."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     from app.config import settings
-    monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
+    if hasattr(settings, "GEMINI_API_KEY"):
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", None, raising=False)
 
     # 1. Direct AnalysisService works
     service = AnalysisService()

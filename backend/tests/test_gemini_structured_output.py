@@ -425,9 +425,13 @@ def test_epistemic_safety_tags_inferred_constraints(valid_decision_dict: Dict[st
 # 7. GeminiLLMClient HTTP & Transport Handling
 # ------------------------------------------------------------------------------
 
-def test_gemini_client_missing_api_key_raises_auth_error():
-    """Tests that invoking GeminiLLMClient without an API key raises LLMAuthenticationError."""
-    client = GeminiLLMClient(api_key="")
+def test_gemini_client_missing_project_raises_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests that invoking GeminiLLMClient without a configured project raises LLMAuthenticationError."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "GOOGLE_CLOUD_PROJECT", None)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    client = GeminiLLMClient(project="")
 
     with pytest.raises(LLMAuthenticationError) as exc_info:
         client.generate_structured(
@@ -435,7 +439,7 @@ def test_gemini_client_missing_api_key_raises_auth_error():
             response_schema=DecisionModel,
         )
 
-    assert "Gemini API key is not configured" in str(exc_info.value)
+    assert "Google Cloud project is not configured" in str(exc_info.value)
 
 
 def test_gemini_client_successful_generation(valid_decision_dict: Dict[str, Any]):

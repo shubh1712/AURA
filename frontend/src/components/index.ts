@@ -2,5 +2,13 @@ export * from "./common/Header";
 export * from "./decision/DecisionHero";
 export * from "./decision/DecisionForm";
 export * from "./decision/AnalysisResultCard";
+export * from "./decision/DecisionModelSummary";
+export * from "./decision/evidence/EvidenceOverview";
+export * from "./decision/evidence/RequirementList";
+export * from "./decision/evidence/RequirementCard";
+export * from "./decision/evidence/EvidenceItemCard";
+export * from "./decision/evidence/EvidenceGapsSection";
+export * from "./decision/evidence/SourceList";
 export * from "./ui/Button";
 export * from "./ui/Card";
+

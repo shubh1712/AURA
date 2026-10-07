@@ -9,8 +9,12 @@ from app.main import app
 from app.services.analysis_service import (
     AnalysisService,
     get_analysis_service,
+    get_evidence_service,
     get_llm_client,
+    get_search_provider,
 )
+from app.services.evidence.search_provider import FakeSearchProvider, SearchResultItem
+from app.services.evidence.service import EvidenceService
 from app.services.llm.client import FakeLLMClient
 from app.services.llm.gemini import GeminiLLMClient
 
@@ -70,10 +74,10 @@ def _guarded_generate_structured(self: GeminiLLMClient, *args: object, **kwargs:
     or if a mock http_client transport was supplied.
     """
     if not is_live_calls_allowed() and self._http_client is None:
-        # Check credentials first so missing API key tests raise LLMAuthenticationError
-        self._get_api_key()
+        # Check credentials/configuration first so missing project/key tests raise LLMAuthenticationError
+        self._get_project()
         raise RuntimeError(
-            "Fail-closed safety violation: External Gemini API call attempted during normal test execution. "
+            "Fail-closed safety violation: External Gemini/Vertex AI call attempted during normal test execution. "
             "Normal automated tests must use FakeLLMClient / MockLLMClient or mocked http_client transport. "
             "To execute live API tests, mark with @pytest.mark.live_llm and run 'pytest -m live_llm'."
         )
@@ -89,11 +93,18 @@ GeminiLLMClient.generate_structured = _guarded_generate_structured
 
 @pytest.fixture(autouse=True)
 def configure_test_llm_client(request: pytest.FixtureRequest) -> Generator[None, None, None]:
-    """Ensures every normal automated test uses FakeLLMClient and forbids external calls.
+    """Ensures every normal automated test uses FakeLLMClient and FakeSearchProvider and forbids external calls.
 
-    Opt-in tests marked with @pytest.mark.live_llm are permitted live external calls.
+    Opt-in tests marked with @pytest.mark.live_llm, @pytest.mark.live_search, @pytest.mark.live_analysis,
+    or @pytest.mark.live_vertex_smoke are permitted live external calls.
     """
-    is_live = bool(request.node.get_closest_marker("live_llm"))
+    is_live = (
+        bool(request.node.get_closest_marker("live_llm"))
+        or bool(request.node.get_closest_marker("live_search"))
+        or bool(request.node.get_closest_marker("live_analysis"))
+        or bool(request.node.get_closest_marker("live_vertex_smoke"))
+        or bool(request.node.get_closest_marker("live_decomposition"))
+    )
     set_live_calls_allowed(is_live)
 
     if is_live:
@@ -101,11 +112,32 @@ def configure_test_llm_client(request: pytest.FixtureRequest) -> Generator[None,
         set_live_calls_allowed(False)
         return
 
-    # Normal test suite: inject deterministic FakeLLMClient
+    # Normal test suite: inject deterministic FakeLLMClient and FakeSearchProvider
+    from datetime import date
+
     fake_client = FakeLLMClient()
+    default_item = SearchResultItem(
+        title="B2B SaaS Pricing Elasticity Research",
+        url="https://metrics.example.com/saas-elasticity?utm_source=feed",
+        snippet="In a sample of 240 B2B SaaS companies, a 20% pricing reduction was associated with a 14% median increase in new customer acquisition.",
+        raw_content="In a sample of 240 B2B SaaS companies, a 20% pricing reduction was associated with a 14% median increase in new customer acquisition.",
+        publisher="SaaS Metrics Journal",
+        published_date=date(2024, 5, 15),
+    )
+    fake_search = FakeSearchProvider(default_results=[default_item])
+    evidence_svc = EvidenceService.create_default(
+        llm_client=fake_client,
+        search_provider=fake_search,
+    )
+
     AnalysisService.set_client_factory(lambda: fake_client)
     app.dependency_overrides[get_llm_client] = lambda: fake_client
-    app.dependency_overrides[get_analysis_service] = lambda: AnalysisService(llm_client=fake_client)
+    app.dependency_overrides[get_search_provider] = lambda: fake_search
+    app.dependency_overrides[get_evidence_service] = lambda: evidence_svc
+    app.dependency_overrides[get_analysis_service] = lambda: AnalysisService(
+        llm_client=fake_client,
+        evidence_service=evidence_svc,
+    )
 
     yield
 

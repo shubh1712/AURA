@@ -10,6 +10,7 @@ export interface UseDecisionAnalysisReturn {
   isLoading: boolean;
   validationError: string | null;
   apiError: string | null;
+  apiErrorStatusCode: number | null;
   apiResponse: AnalysisResponse | null;
   updateField: (field: keyof DecisionFormData, value: string) => void;
   reset: () => void;
@@ -33,6 +34,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [apiErrorStatusCode, setApiErrorStatusCode] = useState<number | null>(null);
   const [apiResponse, setApiResponse] = useState<AnalysisResponse | null>(null);
   const isSubmittingRef = useRef<boolean>(false);
 
@@ -43,7 +45,10 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
         [field]: value,
       }));
       if (validationError) setValidationError(null);
-      if (apiError) setApiError(null);
+      if (apiError) {
+        setApiError(null);
+        setApiErrorStatusCode(null);
+      }
     },
     [validationError, apiError]
   );
@@ -51,6 +56,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
   const clearError = useCallback(() => {
     setValidationError(null);
     setApiError(null);
+    setApiErrorStatusCode(null);
   }, []);
 
   const reset = useCallback(() => {
@@ -60,6 +66,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
     setIsLoading(false);
     setValidationError(null);
     setApiError(null);
+    setApiErrorStatusCode(null);
     setApiResponse(null);
   }, []);
 
@@ -87,6 +94,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
     isSubmittingRef.current = true;
     setValidationError(null);
     setApiError(null);
+    setApiErrorStatusCode(null);
     setApiResponse(null); // Clear any prior stale result
     setIsLoading(true);
     setStatus("submitting");
@@ -122,7 +130,12 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
         error instanceof ApiClientError
           ? error.message
           : "An unexpected error occurred while communicating with the AURA backend.";
+      const statusCode =
+        error instanceof ApiClientError && typeof error.statusCode === "number"
+          ? error.statusCode
+          : null;
       setApiError(errorMessage);
+      setApiErrorStatusCode(statusCode);
       setStatus("error");
       return false;
     } finally {
@@ -137,6 +150,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
     isLoading,
     validationError,
     apiError,
+    apiErrorStatusCode,
     apiResponse,
     updateField,
     reset,

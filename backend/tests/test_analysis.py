@@ -34,6 +34,9 @@ def test_analyze_valid_full_payload(client: TestClient) -> None:
     assert data["status"] == "completed"
     assert "decision_model" in data
     assert data["decision_model"] is not None
+    assert "evidence_package" in data
+    assert data["evidence_package"] is not None
+    assert data["evidence_package"]["decision_model_id"] == data["decision_model"]["id"]
     assert (
         data["question"]
         == "Should we migrate from a monolithic database to a distributed architecture?"
@@ -54,6 +57,8 @@ def test_analyze_valid_minimal_payload(client: TestClient) -> None:
     assert data["question"] == payload["question"]
     assert data["status"] == "completed"
     assert "decision_model" in data
+    assert "evidence_package" in data
+    assert data["evidence_package"] is not None
     assert "analysis_id" in data
 
 
@@ -159,3 +164,4 @@ def test_analysis_response_model_direct() -> None:
     assert res.status == "pending"
     assert res.question == "Should we adopt GraphQL?"
     assert res.message == "Queued for analysis"
+    assert res.evidence_package is None

@@ -12,6 +12,8 @@ This layer has ZERO knowledge of:
 """
 
 from abc import ABC, abstractmethod
+import threading
+import time
 from typing import Any, Dict, Generic, Optional, Type, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -85,9 +87,14 @@ class LLMConfig(BaseModel):
         description="Maximum tokens allowed in generation.",
     )
     timeout_seconds: float = Field(
-        default=30.0,
+        default=45.0,
         gt=0.0,
-        description="Maximum duration in seconds before terminating the request.",
+        description="Maximum duration in seconds before terminating an individual HTTP request.",
+    )
+    operation_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Maximum wall-clock duration in seconds for the entire generate_structured operation, across all attempts and backoffs.",
     )
     max_retries: int = Field(
         default=2,
@@ -113,6 +120,7 @@ class LLMClient(ABC):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         """Generates and validates a structured response matching response_schema.
 
@@ -121,6 +129,7 @@ class LLMClient(ABC):
             response_schema: Pydantic model class defining the expected output.
             system_instruction: Optional high-level system framing.
             config: Optional runtime overrides (temperature, timeout, etc.).
+            deadline_monotonic: Optional absolute monotonic deadline from a parent analysis.
 
         Returns:
             An instantiated, validated instance of response_schema (T).
@@ -150,22 +159,26 @@ class MockLLMClient(LLMClient):
         self._canned_responses: Dict[Type[BaseModel], BaseModel] = {}
         self._canned_error: Optional[Exception] = None
         self.call_history: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def register_response(self, schema_cls: Type[T], response_instance: T) -> None:
         """Registers a fixed response to return when schema_cls is requested."""
         if not isinstance(response_instance, schema_cls):
             raise ValueError(f"Instance must match registered schema {schema_cls.__name__}")
-        self._canned_responses[schema_cls] = response_instance
+        with self._lock:
+            self._canned_responses[schema_cls] = response_instance
 
     def register_error(self, error: Exception) -> None:
         """Forces the next call to raise the specified exception."""
-        self._canned_error = error
+        with self._lock:
+            self._canned_error = error
 
     def clear(self) -> None:
         """Clears canned responses, errors, and history."""
-        self._canned_responses.clear()
-        self._canned_error = None
-        self.call_history.clear()
+        with self._lock:
+            self._canned_responses.clear()
+            self._canned_error = None
+            self.call_history.clear()
 
     def generate_structured(
         self,
@@ -173,16 +186,25 @@ class MockLLMClient(LLMClient):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
         # Record call telemetry
-        self.call_history.append({
-            "prompt": prompt,
-            "response_schema": response_schema,
-            "system_instruction": system_instruction,
-            "config": cfg,
-        })
+        with self._lock:
+            self.call_history.append({
+                "prompt": prompt,
+                "response_schema": response_schema,
+                "system_instruction": system_instruction,
+                "config": cfg,
+                "deadline_monotonic": deadline_monotonic,
+            })
+
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError(
+                f"Mock client operation timed out against monotonic deadline {deadline_monotonic}.",
+                details={"deadline_monotonic": deadline_monotonic},
+            )
 
         # Simulate programmed errors
         if self._canned_error:
@@ -241,6 +263,7 @@ class FakeLLMClient(LLMClient):
         response_schema: Type[T],
         system_instruction: Optional[str] = None,
         config: Optional[LLMConfig] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
@@ -249,7 +272,14 @@ class FakeLLMClient(LLMClient):
             "response_schema": response_schema,
             "system_instruction": system_instruction,
             "config": cfg,
+            "deadline_monotonic": deadline_monotonic,
         })
+
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise LLMTimeoutError(
+                f"Fake client operation timed out against monotonic deadline {deadline_monotonic}.",
+                details={"deadline_monotonic": deadline_monotonic},
+            )
 
         if self._canned_error:
             err = self._canned_error
@@ -270,6 +300,24 @@ class FakeLLMClient(LLMClient):
             if "Decision Question:\n" in prompt:
                 question = prompt.split("Decision Question:\n", 1)[1].split("\n\n", 1)[0].strip()
             return get_default_decision_model(question=question)  # type: ignore
+
+        # If requesting CandidateRequirementsPayload, construct realistic candidate requirements
+        try:
+            from app.services.evidence.requirements import CandidateRequirementsPayload
+            if issubclass(response_schema, CandidateRequirementsPayload):
+                from app.services.evidence.requirements import get_default_candidate_requirements
+                return get_default_candidate_requirements()  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateEvidenceMappingPayload, construct realistic candidate findings
+        try:
+            from app.services.evidence.mapper import CandidateEvidenceMappingPayload
+            if issubclass(response_schema, CandidateEvidenceMappingPayload):
+                from app.services.evidence.mapper import get_default_candidate_findings
+                return get_default_candidate_findings(prompt)  # type: ignore
+        except ImportError:
+            pass
 
         try:
             return response_schema.model_validate({})
