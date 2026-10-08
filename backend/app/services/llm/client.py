@@ -240,22 +240,26 @@ class FakeLLMClient(LLMClient):
         self._canned_responses: Dict[Type[BaseModel], BaseModel] = {}
         self._canned_error: Optional[Exception] = None
         self.call_history: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def register_response(self, schema_cls: Type[T], response_instance: T) -> None:
         """Registers a fixed response to return when schema_cls is requested."""
         if not isinstance(response_instance, schema_cls):
             raise ValueError(f"Instance must match registered schema {schema_cls.__name__}")
-        self._canned_responses[schema_cls] = response_instance
+        with self._lock:
+            self._canned_responses[schema_cls] = response_instance
 
     def register_error(self, error: Exception) -> None:
         """Forces the next call to raise the specified exception."""
-        self._canned_error = error
+        with self._lock:
+            self._canned_error = error
 
     def clear(self) -> None:
         """Clears canned responses, errors, and history."""
-        self._canned_responses.clear()
-        self._canned_error = None
-        self.call_history.clear()
+        with self._lock:
+            self._canned_responses.clear()
+            self._canned_error = None
+            self.call_history.clear()
 
     def generate_structured(
         self,
@@ -267,13 +271,14 @@ class FakeLLMClient(LLMClient):
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
-        self.call_history.append({
-            "prompt": prompt,
-            "response_schema": response_schema,
-            "system_instruction": system_instruction,
-            "config": cfg,
-            "deadline_monotonic": deadline_monotonic,
-        })
+        with self._lock:
+            self.call_history.append({
+                "prompt": prompt,
+                "response_schema": response_schema,
+                "system_instruction": system_instruction,
+                "config": cfg,
+                "deadline_monotonic": deadline_monotonic,
+            })
 
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError(
@@ -281,13 +286,14 @@ class FakeLLMClient(LLMClient):
                 details={"deadline_monotonic": deadline_monotonic},
             )
 
-        if self._canned_error:
-            err = self._canned_error
-            self._canned_error = None
-            raise err
+        with self._lock:
+            if self._canned_error:
+                err = self._canned_error
+                self._canned_error = None
+                raise err
 
-        if response_schema in self._canned_responses:
-            return self._canned_responses[response_schema]  # type: ignore
+            if response_schema in self._canned_responses:
+                return self._canned_responses[response_schema]  # type: ignore
 
         if self.default_response and isinstance(self.default_response, response_schema):
             return self.default_response  # type: ignore
@@ -316,6 +322,46 @@ class FakeLLMClient(LLMClient):
             if issubclass(response_schema, CandidateEvidenceMappingPayload):
                 from app.services.evidence.mapper import get_default_candidate_findings
                 return get_default_candidate_findings(prompt)  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidatePerspectiveAnalysis, construct realistic candidate perspective
+        try:
+            from app.schemas.reasoning import CandidatePerspectiveAnalysis, PerspectiveType
+            if issubclass(response_schema, CandidatePerspectiveAnalysis):
+                ptype = PerspectiveType.GROWTH
+                sys_inst = (system_instruction or "").lower()
+                for pt in (PerspectiveType.FINANCE, PerspectiveType.CUSTOMER, PerspectiveType.RISK, PerspectiveType.GROWTH):
+                    if pt.value in sys_inst:
+                        ptype = pt
+                        break
+                return CandidatePerspectiveAnalysis(
+                    perspective_type=ptype,
+                    summary=f"Automated evaluation from {ptype.value} perspective.",
+                    arguments=[],
+                    critical_assumption_ids=[],
+                    evidence_gap_ids=[],
+                    unresolved_questions=[],
+                    limitations=[],
+                    opportunities=[],
+                    concerns=[],
+                )  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateBoardSynthesis, construct realistic candidate synthesis
+        try:
+            from app.schemas.reasoning import CandidateBoardSynthesis
+            if issubclass(response_schema, CandidateBoardSynthesis):
+                return CandidateBoardSynthesis(
+                    summary="Reconciliation of board deliberation across canonical perspectives.",
+                    areas_of_agreement=["Common strategic alignment on baseline objectives."],
+                    disagreement_ids=[],
+                    critical_assumption_ids=[],
+                    critical_evidence_gap_ids=[],
+                    evidence_sensitive_points=[],
+                    unresolved_questions=[],
+                )  # type: ignore
         except ImportError:
             pass
 

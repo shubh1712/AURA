@@ -51,6 +51,7 @@ class AnalysisRequest(BaseModel):
 
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
+from app.schemas.reasoning import ReasoningBoard
 
 
 class AnalysisResponse(BaseModel):
@@ -94,6 +95,7 @@ class AnalysisResponse(BaseModel):
                     "gaps": [],
                     "summary": "0 evidence requirements.",
                 },
+                "reasoning_board": None,
                 "question": "Should we migrate from a monolithic database to a distributed architecture?",
                 "message": "Decision deconstruction and evidence gathering completed successfully.",
             }
@@ -115,6 +117,10 @@ class AnalysisResponse(BaseModel):
     evidence_package: Optional[EvidencePackage] = Field(
         default=None,
         description="Empirical evidence package containing sources, findings, claim links, and gaps.",
+    )
+    reasoning_board: Optional[ReasoningBoard] = Field(
+        default=None,
+        description="Authoritative AI Boardroom reasoning evaluation across canonical perspectives.",
     )
     question: str = Field(
         default="",

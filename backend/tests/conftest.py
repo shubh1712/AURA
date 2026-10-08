@@ -11,12 +11,14 @@ from app.services.analysis_service import (
     get_analysis_service,
     get_evidence_service,
     get_llm_client,
+    get_reasoning_service,
     get_search_provider,
 )
 from app.services.evidence.search_provider import FakeSearchProvider, SearchResultItem
 from app.services.evidence.service import EvidenceService
 from app.services.llm.client import FakeLLMClient
 from app.services.llm.gemini import GeminiLLMClient
+from app.services.reasoning.service import ReasoningService
 
 # ------------------------------------------------------------------------------
 # 1. Test-Layer Safety State
@@ -129,14 +131,19 @@ def configure_test_llm_client(request: pytest.FixtureRequest) -> Generator[None,
         llm_client=fake_client,
         search_provider=fake_search,
     )
+    reasoning_svc = ReasoningService.create_default(
+        llm_client=fake_client,
+    )
 
     AnalysisService.set_client_factory(lambda: fake_client)
     app.dependency_overrides[get_llm_client] = lambda: fake_client
     app.dependency_overrides[get_search_provider] = lambda: fake_search
     app.dependency_overrides[get_evidence_service] = lambda: evidence_svc
+    app.dependency_overrides[get_reasoning_service] = lambda: reasoning_svc
     app.dependency_overrides[get_analysis_service] = lambda: AnalysisService(
         llm_client=fake_client,
         evidence_service=evidence_svc,
+        reasoning_service=reasoning_svc,
     )
 
     yield
