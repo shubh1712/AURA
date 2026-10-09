@@ -49,7 +49,15 @@ class LLMRateLimitError(LLMError):
 
 class LLMResponseValidationError(LLMError):
     """Raised when the LLM output fails to conform to the requested Pydantic schema."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+        category: Optional[str] = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.category = category or (details.get("category") if details else None) or "other_pydantic_error"
 
 
 class LLMProviderError(LLMError):
@@ -87,7 +95,7 @@ class LLMConfig(BaseModel):
         description="Maximum tokens allowed in generation.",
     )
     timeout_seconds: float = Field(
-        default=45.0,
+        default=30.0,
         gt=0.0,
         description="Maximum duration in seconds before terminating an individual HTTP request.",
     )

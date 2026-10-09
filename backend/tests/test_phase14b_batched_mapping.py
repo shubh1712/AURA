@@ -123,17 +123,20 @@ def _create_source(
     [
         (0, 0),
         (1, 1),
-        (5, 1),
+        (3, 1),
+        (4, 2),
         (6, 2),
-        (10, 2),
+        (9, 3),
+        (10, 4),
         (30, 6),
     ],
 )
 def test_batch_size_boundaries_and_call_counts(num_sources: int, expected_calls: int) -> None:
-    """Verifies deterministic batch boundaries: 0->0, 1->1, 5->1, 6->2, 10->2, 30->6 calls."""
+    """Verifies deterministic batch boundaries with batch_size=3: 0->0, 1->1, 3->1, 4->2, 6->2, 9->3, 10->4, 30->6 calls."""
     fake_client = FakeLLMClient()
     mapper = EvidenceMapper(llm_client=fake_client)
-    assert mapper.batch_size == 5
+    assert mapper.batch_size == EVIDENCE_MAPPING_BATCH_SIZE
+    assert mapper.batch_size == 3
 
     dm = _create_decision_model()
     req = _create_requirement()

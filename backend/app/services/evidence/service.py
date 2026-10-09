@@ -13,9 +13,12 @@ Guarantees:
 """
 
 from datetime import datetime, timezone
+import logging
 import time
 from typing import Dict, List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import (
@@ -188,6 +191,8 @@ class EvidenceService:
             EvidenceServiceError: On unrecoverable failure at any pipeline stage.
         """
         # Stage 1: Requirement Generation
+        t_start_evidence = time.monotonic()
+        t0_sub = time.monotonic()
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError("Operation timed out before evidence requirements could begin.")
 
@@ -196,13 +201,26 @@ class EvidenceService:
                 decision_model,
                 deadline_monotonic=deadline_monotonic,
             )
+            t_req = time.monotonic() - t0_sub
+            logger.info(
+                "Evidence substage 'requirement_generation' completed in %.2fs (requirements=%d)",
+                t_req,
+                len(requirements),
+            )
         except Exception as err:
+            t_fail = time.monotonic() - t0_sub
+            logger.warning(
+                "Evidence substage 'requirement_generation' failed after %.2fs with %s",
+                t_fail,
+                type(err).__name__,
+            )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'requirement_generation': {err}",
                 stage="requirement_generation",
             ) from err
 
         # Stage 2: Retrieval
+        t0_sub = time.monotonic()
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise SearchTimeoutError("Operation timed out before evidence retrieval could begin.")
 
@@ -211,25 +229,53 @@ class EvidenceService:
                 requirements,
                 deadline_monotonic=deadline_monotonic,
             )
+            t_ret = time.monotonic() - t0_sub
+            total_items = sum(len(r.results) for r in retrieval_results)
+            logger.info(
+                "Evidence substage 'retrieval' completed in %.2fs (queries=%d, results=%d)",
+                t_ret,
+                len(retrieval_results),
+                total_items,
+            )
         except Exception as err:
+            t_fail = time.monotonic() - t0_sub
+            logger.warning(
+                "Evidence substage 'retrieval' failed after %.2fs with %s",
+                t_fail,
+                type(err).__name__,
+            )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'retrieval': {err}",
                 stage="retrieval",
             ) from err
 
         # Stage 3: Normalization
+        t0_sub = time.monotonic()
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise SearchTimeoutError("Operation timed out before source normalization could begin.")
 
         try:
             normalized_sources = self.normalizer.normalize(retrieval_results)
+            t_norm = time.monotonic() - t0_sub
+            logger.info(
+                "Evidence substage 'normalization' completed in %.2fs (normalized_sources=%d)",
+                t_norm,
+                len(normalized_sources),
+            )
         except Exception as err:
+            t_fail = time.monotonic() - t0_sub
+            logger.warning(
+                "Evidence substage 'normalization' failed after %.2fs with %s",
+                t_fail,
+                type(err).__name__,
+            )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'normalization': {err}",
                 stage="normalization",
             ) from err
 
         # Stage 4: Evidence Mapping
+        t0_sub = time.monotonic()
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError("Operation timed out before evidence mapping could begin.")
 
@@ -240,13 +286,27 @@ class EvidenceService:
                 normalized_sources=normalized_sources,
                 deadline_monotonic=deadline_monotonic,
             )
+            t_map = time.monotonic() - t0_sub
+            logger.info(
+                "Evidence substage 'mapping' completed in %.2fs (items=%d, claim_links=%d)",
+                t_map,
+                len(mapping_result.items),
+                len(mapping_result.claim_links),
+            )
         except Exception as err:
+            t_fail = time.monotonic() - t0_sub
+            logger.warning(
+                "Evidence substage 'mapping' failed after %.2fs with %s",
+                t_fail,
+                type(err).__name__,
+            )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'mapping': {err}",
                 stage="mapping",
             ) from err
 
         # Stage 5: Gap Detection & Status Resolution
+        t0_sub = time.monotonic()
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError("Operation timed out before gap detection could begin.")
 
@@ -256,7 +316,19 @@ class EvidenceService:
                 requirements=requirements,
                 mapping_result=mapping_result,
             )
+            t_gap = time.monotonic() - t0_sub
+            logger.info(
+                "Evidence substage 'gap_detection' completed in %.2fs (gaps=%d)",
+                t_gap,
+                len(gap_result.gaps),
+            )
         except Exception as err:
+            t_fail = time.monotonic() - t0_sub
+            logger.warning(
+                "Evidence substage 'gap_detection' failed after %.2fs with %s",
+                t_fail,
+                type(err).__name__,
+            )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'gap_detection': {err}",
                 stage="gap_detection",
@@ -306,7 +378,7 @@ class EvidenceService:
         package_id = f"evpkg_{decision_model.id}"[:64]
 
         try:
-            return EvidencePackage(
+            pkg = EvidencePackage(
                 id=package_id,
                 decision_model_id=decision_model.id,
                 requirements=gap_result.requirements,  # Updated requirements from gap detector
@@ -317,6 +389,14 @@ class EvidenceService:
                 summary=summary,
                 created_at=datetime.now(timezone.utc),
             )
+            logger.info(
+                "Evidence orchestration completed successfully in %.2fs (sources=%d, items=%d, gaps=%d)",
+                time.monotonic() - t_start_evidence,
+                len(unique_sources),
+                len(mapping_result.items),
+                len(gap_result.gaps),
+            )
+            return pkg
         except Exception as err:
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'packaging': {err}",

@@ -27,6 +27,23 @@ from app.services.reasoning.service import ReasoningService
 _LIVE_CALLS_ALLOWED: bool = False
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Configures pytest session and resolves live marker expressions."""
+    markexpr = config.getoption("markexpr", "")
+    import re
+    if markexpr and re.search(r"(?<!not\s)\blive(?:_\w+)?\b", markexpr):
+        import os
+        os.environ["RUN_LIVE_ANALYSIS_TESTS"] = "1"
+        os.environ["AURA_LLM_DIAGNOSTICS"] = "1"
+        cleaned_expr = markexpr
+        for tag in ("live_analysis", "live_llm", "live_search", "live_vertex_smoke", "live_decomposition", "live"):
+            cleaned_expr = cleaned_expr.replace(f"not {tag} and ", "").replace(f"and not {tag}", "").replace(f"not {tag}", "")
+        config.option.markexpr = cleaned_expr.strip()
+    else:
+        import os
+        os.environ.pop("RUN_LIVE_ANALYSIS_TESTS", None)
+
+
 def set_live_calls_allowed(allowed: bool) -> None:
     """Controls whether live external Gemini API calls are permitted during tests."""
     global _LIVE_CALLS_ALLOWED
@@ -101,7 +118,8 @@ def configure_test_llm_client(request: pytest.FixtureRequest) -> Generator[None,
     or @pytest.mark.live_vertex_smoke are permitted live external calls.
     """
     is_live = (
-        bool(request.node.get_closest_marker("live_llm"))
+        bool(request.node.get_closest_marker("live"))
+        or bool(request.node.get_closest_marker("live_llm"))
         or bool(request.node.get_closest_marker("live_search"))
         or bool(request.node.get_closest_marker("live_analysis"))
         or bool(request.node.get_closest_marker("live_vertex_smoke"))

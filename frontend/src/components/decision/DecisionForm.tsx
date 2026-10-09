@@ -1,11 +1,16 @@
 "use client";
 
 import React from "react";
-import { DecisionFormData } from "@/types";
+import { DecisionFormData, JobStatus, PipelineStage } from "@/types";
+import { StageAwareProgress } from "./StageAwareProgress";
 
 interface DecisionFormProps {
   formData: DecisionFormData;
   isLoading: boolean;
+  jobStatus?: JobStatus | null;
+  pipelineStage?: PipelineStage | null;
+  progressMessage?: string | null;
+  jobId?: string | null;
   validationError: string | null;
   apiError: string | null;
   apiErrorStatusCode?: number | null;
@@ -13,11 +18,16 @@ interface DecisionFormProps {
   onSubmit: (e: React.FormEvent) => void;
   onReset: () => void;
   onClearError: () => void;
+  onRetry?: () => void;
 }
 
 export function DecisionForm({
   formData,
   isLoading,
+  jobStatus,
+  pipelineStage,
+  progressMessage,
+  jobId,
   validationError,
   apiError,
   apiErrorStatusCode,
@@ -25,6 +35,7 @@ export function DecisionForm({
   onSubmit,
   onReset,
   onClearError,
+  onRetry,
 }: DecisionFormProps) {
   const isFormDirty =
     Boolean(formData.question.trim()) ||
@@ -54,7 +65,7 @@ export function DecisionForm({
         </div>
       )}
 
-      {apiError && (
+      {apiError && !jobStatus && (
         <div
           role="alert"
           className="rounded-lg border border-red-800/50 bg-red-950/30 p-4 text-xs text-red-200 space-y-1.5"
@@ -196,26 +207,21 @@ export function DecisionForm({
         </div>
 
         <span className="text-[11px] text-zinc-500 sm:text-right font-mono">
-          Calls FastAPI <code className="text-zinc-400">/api/analyze</code>
+          Calls FastAPI <code className="text-zinc-400">/api/analysis/jobs</code>
         </span>
       </div>
 
-      {/* Truthful Loading State Callout */}
-      {isLoading && (
-        <div
-          role="status"
-          className="rounded-xl border border-zinc-800/90 bg-zinc-950/70 p-4 text-xs text-zinc-300 flex items-start gap-3"
-        >
-          <span className="flex h-2 w-2 rounded-full bg-indigo-400 mt-1 shrink-0 animate-ping" />
-          <div className="space-y-1">
-            <p className="font-medium text-zinc-200">
-              AURA is structuring the decision and gathering relevant evidence.
-            </p>
-            <p className="text-zinc-400 leading-relaxed font-sans">
-              This analysis performs multi-source research and factual evidence mapping; it may take a little while.
-            </p>
-          </div>
-        </div>
+      {/* Stage-Aware Progress & Error Callout */}
+      {(isLoading || jobStatus === "failed" || jobStatus === "timed_out") && (
+        <StageAwareProgress
+          status={jobStatus ?? (isLoading ? "running" : null)}
+          stage={pipelineStage ?? null}
+          progressMessage={progressMessage}
+          jobId={jobId}
+          error={apiError}
+          errorStatusCode={apiErrorStatusCode}
+          onRetry={onRetry}
+        />
       )}
     </form>
   );

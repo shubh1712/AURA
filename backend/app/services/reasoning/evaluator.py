@@ -9,8 +9,9 @@ Executes structured analytical evaluation for a single canonical boardroom persp
 - Pure single-perspective execution: does not perform concurrency or multi-perspective orchestration.
 """
 
+import threading
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.schemas.reasoning import (
     CandidatePerspectiveAnalysis,
@@ -49,6 +50,18 @@ class PerspectiveReasoner:
         """
         self.llm_client = llm_client
         self.config = config or DEFAULT_LLM_CONFIG
+        self._thread_local = threading.local()
+        self._diagnostic_lock = threading.Lock()
+        self._latest_diagnostic: Optional[Dict[str, Any]] = None
+
+    @property
+    def last_diagnostic(self) -> Optional[Dict[str, Any]]:
+        """Thread-safe access to the most recent diagnostic recorded on this reasoner."""
+        thread_diag = getattr(self._thread_local, "diagnostic", None)
+        if thread_diag is not None:
+            return thread_diag
+        with self._diagnostic_lock:
+            return self._latest_diagnostic
 
     def evaluate(
         self,
@@ -82,28 +95,36 @@ class PerspectiveReasoner:
 
         # 3. Structured candidate generation via LLMClient
         try:
-            candidate: CandidatePerspectiveAnalysis = self.llm_client.generate_structured(
-                prompt=prompt.user_prompt,
-                response_schema=CandidatePerspectiveAnalysis,
-                system_instruction=prompt.system_instruction,
-                config=self.config,
-                deadline_monotonic=deadline_monotonic,
-            )
-        except LLMTimeoutError as exc:
-            raise ReasoningEvaluationError(
-                f"LLM generation timed out for perspective '{ptype}': {exc.message}"
-            ) from exc
-        except LLMError as exc:
-            raise ReasoningEvaluationError(
-                f"LLM generation failed for perspective '{ptype}': {exc.message}"
-            ) from exc
-        except Exception as exc:
-            raise ReasoningEvaluationError(
-                f"Unexpected failure generating perspective '{ptype}': {str(exc)}"
-            ) from exc
+            try:
+                candidate: CandidatePerspectiveAnalysis = self.llm_client.generate_structured(
+                    prompt=prompt.user_prompt,
+                    response_schema=CandidatePerspectiveAnalysis,
+                    system_instruction=prompt.system_instruction,
+                    config=self.config,
+                    deadline_monotonic=deadline_monotonic,
+                )
+            except LLMTimeoutError as exc:
+                raise ReasoningEvaluationError(
+                    f"LLM generation timed out for perspective '{ptype}': {exc.message}"
+                ) from exc
+            except LLMError as exc:
+                raise ReasoningEvaluationError(
+                    f"LLM generation failed for perspective '{ptype}': {exc.message}"
+                ) from exc
+            except Exception as exc:
+                raise ReasoningEvaluationError(
+                    f"Unexpected failure generating perspective '{ptype}': {str(exc)}"
+                ) from exc
 
-        # 4. Deterministic grounding and lineage validation
-        return validate_and_reconcile_candidate_perspective(
-            candidate=candidate,
-            context=perspective_context,
-        )
+            # 4. Deterministic grounding and lineage validation
+            return validate_and_reconcile_candidate_perspective(
+                candidate=candidate,
+                context=perspective_context,
+            )
+        finally:
+            raw_diag = getattr(self.llm_client, "last_diagnostic", None)
+            if isinstance(raw_diag, dict):
+                diag_copy = dict(raw_diag)
+                self._thread_local.diagnostic = diag_copy
+                with self._diagnostic_lock:
+                    self._latest_diagnostic = diag_copy

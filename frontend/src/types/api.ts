@@ -4,6 +4,7 @@
 
 import type { DecisionModel } from "./decision";
 import type { EvidencePackage } from "./evidence";
+import type { ReasoningBoard } from "./reasoning";
 
 export interface AnalysisRequest {
   question: string;
@@ -18,6 +19,7 @@ export interface AnalysisResponse {
   message: string;
   decision_model?: DecisionModel | null;
   evidence_package?: EvidencePackage | null;
+  reasoning_board?: ReasoningBoard | null;
 }
 
 export interface HealthResponse {

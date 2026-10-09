@@ -11,6 +11,10 @@ export default function AuraPage() {
   const {
     formData,
     isLoading,
+    jobId,
+    jobStatus,
+    pipelineStage,
+    progressMessage,
     validationError,
     apiError,
     apiErrorStatusCode,
@@ -41,6 +45,10 @@ export default function AuraPage() {
           <DecisionForm
             formData={formData}
             isLoading={isLoading}
+            jobId={jobId}
+            jobStatus={jobStatus}
+            pipelineStage={pipelineStage}
+            progressMessage={progressMessage}
             validationError={validationError}
             apiError={apiError}
             apiErrorStatusCode={apiErrorStatusCode}
@@ -48,6 +56,7 @@ export default function AuraPage() {
             onSubmit={handleSubmit}
             onReset={reset}
             onClearError={clearError}
+            onRetry={submitAnalysis}
           />
         </div>
 

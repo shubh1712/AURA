@@ -10,7 +10,7 @@ Constructs bounded, deterministic prompts for evaluating an assigned boardroom p
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.services.reasoning.context_builder import (
     PerspectiveContext,
@@ -221,27 +221,111 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
     ]
     sections.append("=== EVIDENCE REQUIREMENTS ===\n" + ("\n".join(req_lines) if req_lines else "  None"))
 
-    # 12. Sources
-    src_lines = [
-        f"  - ID: {s.id} | Type: {s.source_type.value} | Title: {truncate_narrative(s.title, 200)} | "
-        f"Publisher: {s.publisher or 'N/A'} | Date: {s.publication_date or 'N/A'} | "
-        f"Reliability: {s.reliability_score if s.reliability_score is not None else 'None (unassessed)'}"
-        for s in evi.sources
-    ]
-    sections.append("=== SOURCES ===\n" + ("\n".join(src_lines) if src_lines else "  None"))
+    # 12 & 13. Deduplicated Source Excerpt Grouping & Evidence Serialization
+    # Collect and deduplicate excerpts per source_id in deterministic order
+    source_to_excerpts: Dict[str, List[str]] = {}
+    excerpt_lookup: Dict[Tuple[str, str], str] = {}
+    item_excerpt_refs: Dict[str, str] = {}
 
-    # 13. Evidence Items (with untrusted XML containment boundary)
+    for item in evi.items:
+        raw_text = item.content.raw_text if item.content else ""
+        bounded_content = truncate_narrative(raw_text, MAX_SOURCE_EXCERPT_CHARS)
+        if not bounded_content or not bounded_content.strip():
+            item_excerpt_refs[item.id] = "None (empty excerpt)"
+            continue
+
+        src_id = item.source_id
+        if src_id not in source_to_excerpts:
+            source_to_excerpts[src_id] = []
+
+        key = (src_id, bounded_content)
+        if key not in excerpt_lookup:
+            idx = len(source_to_excerpts[src_id]) + 1
+            label = f"{src_id}-EX{idx}"
+            source_to_excerpts[src_id].append(bounded_content)
+            excerpt_lookup[key] = label
+
+        item_excerpt_refs[item.id] = excerpt_lookup[key]
+
+    # 12. Sources (Catalog with Deduplicated Excerpts)
+    known_source_ids = {s.id for s in evi.sources}
+    src_blocks: List[str] = []
+
+    # First, render all canonical sources in authoritative sequence
+    for s in evi.sources:
+        header = (
+            f"  - ID: {s.id} | Type: {s.source_type.value} | Title: {truncate_narrative(s.title, 200)} | "
+            f"Publisher: {s.publisher or 'N/A'} | Date: {s.publication_date or 'N/A'} | "
+            f"Reliability: {s.reliability_score if s.reliability_score is not None else 'None (unassessed)'}"
+        )
+        excerpts = source_to_excerpts.get(s.id, [])
+        if excerpts:
+            excerpt_lines = []
+            for i, exc_text in enumerate(excerpts, 1):
+                label = f"{s.id}-EX{i}"
+                safe_xml = f"<untrusted_source_material>\n{exc_text}\n</untrusted_source_material>"
+                excerpt_lines.append(f"    Excerpt [{label}]:\n{safe_xml}")
+            src_blocks.append(header + "\n    Source Excerpts:\n" + "\n".join(excerpt_lines))
+        else:
+            src_blocks.append(header + "\n    Source Excerpts: None")
+
+    # Second, handle any uncataloged sources referenced by evidence items
+    uncataloged_source_ids = sorted(set(source_to_excerpts.keys()) - known_source_ids)
+    for ms_id in uncataloged_source_ids:
+        header = (
+            f"  - ID: {ms_id} | Type: uncataloged | Warning: Source referenced by evidence items but missing from sources catalog"
+        )
+        excerpts = source_to_excerpts[ms_id]
+        excerpt_lines = []
+        for i, exc_text in enumerate(excerpts, 1):
+            label = f"{ms_id}-EX{i}"
+            safe_xml = f"<untrusted_source_material>\n{exc_text}\n</untrusted_source_material>"
+            excerpt_lines.append(f"    Excerpt [{label}]:\n{safe_xml}")
+        src_blocks.append(header + "\n    Source Excerpts:\n" + "\n".join(excerpt_lines))
+
+    sec12_intro = (
+        "=== SOURCES ===\n"
+        "Note: Retrieved source text is deduplicated and grouped under each source below. "
+        "Evidence items in Section 13 reference these excerpts via prompt-local labels [src_id-EX#].\n"
+    )
+    sections.append(sec12_intro + ("\n".join(src_blocks) if src_blocks else "  None"))
+
+    # 13. Evidence Items (referencing deduplicated source excerpts above)
+    sec13_lines: List[str] = [
+        "=== EVIDENCE ITEMS ===",
+        "Note: Each evidence item references its source material excerpt via [src_id-EX#] from Section 12 above.",
+    ]
     item_lines: List[str] = []
     for item in evi.items:
-        bounded_content = truncate_narrative(item.content.raw_text, MAX_SOURCE_EXCERPT_CHARS)
-        safe_xml = f"<untrusted_source_material>\n{bounded_content}\n</untrusted_source_material>"
+        # Determine linked requirements from claim links
+        linked_reqs = sorted({
+            cl.requirement_id
+            for cl in evi.claim_links
+            if cl.evidence_item_id == item.id and cl.requirement_id
+        })
+        req_str = ", ".join(linked_reqs) if linked_reqs else "None"
+
+        # Format numeric data
         nums = [f"{n.metric_name}={n.value} {n.unit or ''}".strip() for n in item.numeric_data]
+        nums_str = str(nums) if nums else "None"
+
+        # Excerpt reference label
+        exc_ref = item_excerpt_refs.get(item.id, "None")
+
+        # Summary / finding
+        finding_str = truncate_narrative(item.summary, MAX_FIELD_NARRATIVE_CHARS) if item.summary else "None"
+
         item_lines.append(
-            f"  - ID: {item.id} | Source: {item.source_id} | Confidence: {item.extraction_confidence.value}\n"
-            f"    Numeric Data: {nums if nums else 'None'}\n"
-            f"    Content Excerpt:\n{safe_xml}"
+            f"  - ID: {item.id} | Source: {item.source_id} | Excerpt Ref: [{exc_ref}] | "
+            f"Epistemic: EVIDENCE | Confidence: {item.extraction_confidence.value} | Requirements: {req_str}\n"
+            f"    Finding: {finding_str}\n"
+            f"    Numeric Data: {nums_str}"
         )
-    sections.append("=== EVIDENCE ITEMS ===\n" + ("\n".join(item_lines) if item_lines else "  None"))
+    if item_lines:
+        sec13_lines.extend(item_lines)
+    else:
+        sec13_lines.append("  None")
+    sections.append("\n".join(sec13_lines))
 
     # 14. Claim-to-Evidence Links
     link_lines = [

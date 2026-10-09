@@ -12,6 +12,7 @@ Coordinates bounded, deterministic execution of the four canonical boardroom per
 """
 
 import concurrent.futures
+import threading
 import time
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -42,8 +43,8 @@ from app.services.reasoning.validator import (
 # 1. Concurrency Constants
 # ------------------------------------------------------------------------------
 
-# Consistent with EvidenceMapper bounded concurrency pattern (MAX_EVIDENCE_MAPPING_WORKERS = 3)
-MAX_PERSPECTIVE_WORKERS: int = 3
+# Bounded ceiling aligned with the four canonical perspectives (Growth, Finance, Customer, Risk)
+MAX_PERSPECTIVE_WORKERS: int = 4
 
 
 # ------------------------------------------------------------------------------
@@ -145,6 +146,24 @@ class PerspectiveOrchestrator:
             raise ValueError(f"max_workers must be at least 1, got {max_workers}.")
         self.reasoner = reasoner
         self.max_workers = max_workers
+        self._thread_local = threading.local()
+        self._diagnostics_lock = threading.Lock()
+        self._latest_perspective_diagnostics: Dict[PerspectiveType, Dict[str, Any]] = {}
+
+    @property
+    def last_perspective_diagnostics(self) -> Dict[PerspectiveType, Dict[str, Any]]:
+        """Thread-safe access to call-scoped diagnostics for the current calling thread."""
+        thread_diag = getattr(self._thread_local, "diagnostics", None)
+        if thread_diag is not None:
+            return thread_diag
+        with self._diagnostics_lock:
+            return dict(self._latest_perspective_diagnostics)
+
+    @last_perspective_diagnostics.setter
+    def last_perspective_diagnostics(self, val: Dict[PerspectiveType, Dict[str, Any]]) -> None:
+        self._thread_local.diagnostics = dict(val)
+        with self._diagnostics_lock:
+            self._latest_perspective_diagnostics = dict(val)
 
     def evaluate_all(
         self,
@@ -167,12 +186,18 @@ class PerspectiveOrchestrator:
             ReasoningOrchestrationError: If execution exceeds deadline or any worker fails.
             ReasoningValidationError: If post-execution validation detects invalid/duplicate outputs.
         """
+        # Call-scoped diagnostics container isolated to the current calling thread
+        call_diagnostics: Dict[PerspectiveType, Dict[str, Any]] = {}
+        self.last_perspective_diagnostics = call_diagnostics
+
         # 1. Deadline pre-check before starting any work
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             timeout_err = LLMTimeoutError("Evaluation deadline expired prior to orchestration.")
-            raise ReasoningOrchestrationError(
+            orch_err = ReasoningOrchestrationError(
                 "Perspective evaluation deadline already expired before orchestration began."
-            ) from timeout_err
+            )
+            orch_err.perspective_diagnostics = dict(call_diagnostics)
+            raise orch_err from timeout_err
 
         # 2. Build shared ReasoningContext once
         reasoning_context: ReasoningContext = build_reasoning_context(
@@ -190,6 +215,27 @@ class PerspectiveOrchestrator:
 
         raw_results: Tuple[ReasoningPerspective, ...]
 
+        def _invoke_worker(
+            ctx: PerspectiveContext,
+        ) -> Tuple[PerspectiveType, Optional[ReasoningPerspective], Optional[Exception], Optional[Dict[str, Any]]]:
+            ptype = ctx.perspective.perspective_type
+            res: Optional[ReasoningPerspective] = None
+            err: Optional[Exception] = None
+            diag: Optional[Dict[str, Any]] = None
+            try:
+                res = self.reasoner.evaluate(ctx, deadline_monotonic=deadline_monotonic)
+            except Exception as exc:
+                err = exc
+            finally:
+                # Capture diagnostic inside the worker thread immediately after generate_structured completes or fails
+                raw_diag = getattr(self.reasoner, "last_diagnostic", None)
+                if not isinstance(raw_diag, dict):
+                    client = getattr(self.reasoner, "llm_client", None)
+                    raw_diag = getattr(client, "last_diagnostic", None) if client is not None else None
+                if isinstance(raw_diag, dict):
+                    diag = dict(raw_diag)
+            return ptype, res, err, diag
+
         if effective_workers <= 1:
             # Sequential execution path (max_workers=1 fallback)
             sequential_results: List[ReasoningPerspective] = []
@@ -200,24 +246,34 @@ class PerspectiveOrchestrator:
                     timeout_err = LLMTimeoutError(
                         f"Evaluation deadline expired before executing perspective '{ptype.value}'."
                     )
-                    raise ReasoningOrchestrationError(
+                    orch_err = ReasoningOrchestrationError(
                         f"Perspective evaluation timed out: {ptype.value}"
-                    ) from timeout_err
+                    )
+                    orch_err.perspective_diagnostics = dict(self.last_perspective_diagnostics)
+                    raise orch_err from timeout_err
 
-                try:
-                    res = self.reasoner.evaluate(ctx, deadline_monotonic=deadline_monotonic)
-                    sequential_results.append(res)
-                except Exception as exc:
+                _, res, exc, diag = _invoke_worker(ctx)
+                if diag is not None:
+                    call_diagnostics[ptype] = diag
+                    self.last_perspective_diagnostics = call_diagnostics
+
+                if exc is not None:
                     if (
                         isinstance(exc, LLMTimeoutError)
                         or isinstance(getattr(exc, "__cause__", None), LLMTimeoutError)
                     ):
-                        raise ReasoningOrchestrationError(
+                        orch_err = ReasoningOrchestrationError(
                             f"Perspective evaluation timed out: {ptype.value}"
-                        ) from exc
-                    raise ReasoningOrchestrationError(
-                        f"Perspective evaluation failed: {ptype.value}"
-                    ) from exc
+                        )
+                    else:
+                        orch_err = ReasoningOrchestrationError(
+                            f"Perspective evaluation failed: {ptype.value}"
+                        )
+                    orch_err.perspective_diagnostics = dict(call_diagnostics)
+                    raise orch_err from exc
+
+                assert res is not None
+                sequential_results.append(res)
 
             raw_results = tuple(sequential_results)
 
@@ -230,7 +286,7 @@ class PerspectiveOrchestrator:
             try:
                 for ctx in perspective_contexts:
                     ptype = ctx.perspective.perspective_type
-                    fut = executor.submit(self.reasoner.evaluate, ctx, deadline_monotonic)
+                    fut = executor.submit(_invoke_worker, ctx)
                     futures[fut] = ptype
 
                 remaining = (
@@ -247,25 +303,41 @@ class PerspectiveOrchestrator:
                 # Cancel queued futures that haven't started; do not block indefinitely on running workers
                 executor.shutdown(wait=False, cancel_futures=True)
 
+            # Collect results and diagnostics from completed futures immediately
+            worker_outputs: Dict[PerspectiveType, Tuple[Optional[ReasoningPerspective], Optional[Exception]]] = {}
+            for fut in done:
+                try:
+                    ptype, res, exc, diag = fut.result()
+                    if diag is not None:
+                        call_diagnostics[ptype] = diag
+                    worker_outputs[ptype] = (res, exc)
+                except Exception as fatal_e:
+                    ptype = futures[fut]
+                    worker_outputs[ptype] = (None, fatal_e)
+            self.last_perspective_diagnostics = call_diagnostics
+
             # Deterministic inspection in canonical perspective order
             # If not all completed or deadline expired while waiting
             if not_done or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
                 # Check if any completed worker already failed with an explicit error
                 for ctx in perspective_contexts:
                     ptype = ctx.perspective.perspective_type
-                    fut = next(f for f, t in futures.items() if t == ptype)
-                    if fut in done and fut.exception() is not None:
-                        exc = fut.exception()
-                        if (
-                            isinstance(exc, LLMTimeoutError)
-                            or isinstance(getattr(exc, "__cause__", None), LLMTimeoutError)
-                        ):
-                            raise ReasoningOrchestrationError(
-                                f"Perspective evaluation timed out: {ptype.value}"
-                            ) from exc
-                        raise ReasoningOrchestrationError(
-                            f"Perspective evaluation failed: {ptype.value}"
-                        ) from exc
+                    if ptype in worker_outputs:
+                        _, exc = worker_outputs[ptype]
+                        if exc is not None:
+                            if (
+                                isinstance(exc, LLMTimeoutError)
+                                or isinstance(getattr(exc, "__cause__", None), LLMTimeoutError)
+                            ):
+                                orch_err = ReasoningOrchestrationError(
+                                    f"Perspective evaluation timed out: {ptype.value}"
+                                )
+                            else:
+                                orch_err = ReasoningOrchestrationError(
+                                    f"Perspective evaluation failed: {ptype.value}"
+                                )
+                            orch_err.perspective_diagnostics = dict(call_diagnostics)
+                            raise orch_err from exc
 
                 # If none completed with an explicit exception, report timeout
                 timed_out_types = [t.value for f, t in futures.items() if f in not_done]
@@ -273,28 +345,33 @@ class PerspectiveOrchestrator:
                 timeout_err = LLMTimeoutError(
                     f"Operation timed out waiting for perspective '{timed_out_desc}'."
                 )
-                raise ReasoningOrchestrationError(
+                orch_err = ReasoningOrchestrationError(
                     f"Perspective evaluation timed out: {timed_out_desc}"
-                ) from timeout_err
+                )
+                orch_err.perspective_diagnostics = dict(call_diagnostics)
+                raise orch_err from timeout_err
 
             # All completed: inspect exceptions strictly by canonical perspective order
             for ctx in perspective_contexts:
                 ptype = ctx.perspective.perspective_type
-                fut = next(f for f, t in futures.items() if t == ptype)
-                exc = fut.exception()
+                res, exc = worker_outputs[ptype]
                 if exc is not None:
                     if (
                         isinstance(exc, LLMTimeoutError)
                         or isinstance(getattr(exc, "__cause__", None), LLMTimeoutError)
                     ):
-                        raise ReasoningOrchestrationError(
+                        orch_err = ReasoningOrchestrationError(
                             f"Perspective evaluation timed out: {ptype.value}"
-                        ) from exc
-                    raise ReasoningOrchestrationError(
-                        f"Perspective evaluation failed: {ptype.value}"
-                    ) from exc
+                        )
+                    else:
+                        orch_err = ReasoningOrchestrationError(
+                            f"Perspective evaluation failed: {ptype.value}"
+                        )
+                    orch_err.perspective_diagnostics = dict(call_diagnostics)
+                    raise orch_err from exc
 
-                results_by_type[ptype] = fut.result()
+                assert res is not None
+                results_by_type[ptype] = res
 
             raw_results = tuple(
                 results_by_type[p_def.perspective_type] for p_def in CANONICAL_PERSPECTIVES

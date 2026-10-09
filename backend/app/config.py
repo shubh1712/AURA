@@ -27,12 +27,39 @@ class Settings(BaseSettings):
 
     # Analysis execution configuration
     ANALYSIS_TIMEOUT_SECONDS: float = 120.0
+    AURA_FRAMER_OPERATION_TIMEOUT_SECONDS: Optional[float] = None
 
     @field_validator("ANALYSIS_TIMEOUT_SECONDS")
     @classmethod
     def validate_analysis_timeout(cls, v: float) -> float:
         if v <= 0.0:
             raise ValueError("ANALYSIS_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_FRAMER_OPERATION_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_framer_timeout(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0.0:
+            raise ValueError("AURA_FRAMER_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    # Asynchronous job configuration
+    AURA_JOBS_DB_PATH: str = "aura_jobs.db"
+    AURA_MAX_JOB_WORKERS: int = 4
+    AURA_JOB_DEFAULT_TIMEOUT_SECONDS: float = 180.0
+
+    @field_validator("AURA_MAX_JOB_WORKERS")
+    @classmethod
+    def validate_max_job_workers(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("AURA_MAX_JOB_WORKERS must be at least 1")
+        return v
+
+    @field_validator("AURA_JOB_DEFAULT_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_job_default_timeout(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("AURA_JOB_DEFAULT_TIMEOUT_SECONDS must be strictly greater than 0.0")
         return v
 
     model_config = SettingsConfigDict(

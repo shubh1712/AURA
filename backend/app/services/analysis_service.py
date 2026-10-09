@@ -7,10 +7,13 @@ controllers thin and free of model dependencies.
 """
 
 import logging
+import os
 import time
+import traceback
 import uuid
 from typing import Callable, Optional, Tuple, Union
 from fastapi import Depends, HTTPException, status
+from fastapi.params import Depends as DependsParam
 
 from app.config import settings
 from app.engines.question_understanding import QuestionUnderstandingEngine
@@ -33,6 +36,7 @@ from app.services.evidence.brave_search import BraveSearchProvider
 from app.services.llm.client import (
     LLMAuthenticationError,
     LLMClient,
+    LLMConfig,
     LLMError,
     LLMProviderError,
     LLMRateLimitError,
@@ -115,6 +119,7 @@ class AnalysisService:
         llm_client: Optional[LLMClient] = None,
         search_provider: Optional[SearchProvider] = None,
         analysis_timeout_seconds: Optional[float] = None,
+        framer_operation_timeout_seconds: Optional[float] = None,
     ) -> None:
         """Initializes AnalysisService with engine, evidence_service, and reasoning_service.
 
@@ -125,15 +130,16 @@ class AnalysisService:
             llm_client: Optional pre-configured LLMClient.
             search_provider: Optional pre-configured SearchProvider.
             analysis_timeout_seconds: Optional overall wall-clock analysis deadline budget in seconds.
+            framer_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 1 Decision Framer.
         """
-        if engine is not None:
+        if engine is not None and not isinstance(engine, DependsParam):
             self.engine = engine
         elif llm_client is not None:
             self.engine = QuestionUnderstandingEngine(llm_client=llm_client)
         else:
             self.engine = self._build_default_engine()
 
-        if evidence_service is not None:
+        if evidence_service is not None and not isinstance(evidence_service, DependsParam):
             self.evidence_service = evidence_service
         else:
             effective_llm = llm_client or getattr(self.engine, "llm_client", None)
@@ -142,7 +148,7 @@ class AnalysisService:
                 search_provider=search_provider,
             )
 
-        if reasoning_service is not None:
+        if reasoning_service is not None and not isinstance(reasoning_service, DependsParam):
             self.reasoning_service = reasoning_service
         else:
             effective_llm = llm_client or getattr(self.engine, "llm_client", None)
@@ -155,6 +161,24 @@ class AnalysisService:
             if analysis_timeout_seconds is not None
             else getattr(settings, "ANALYSIS_TIMEOUT_SECONDS", 120.0)
         )
+
+        raw_framer_to = framer_operation_timeout_seconds
+        if raw_framer_to is None:
+            raw_framer_to = getattr(settings, "AURA_FRAMER_OPERATION_TIMEOUT_SECONDS", None)
+            if raw_framer_to is None:
+                env_val = os.environ.get("AURA_FRAMER_OPERATION_TIMEOUT_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_framer_to = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_FRAMER_OPERATION_TIMEOUT_SECONDS value: {env_val}") from ve
+
+        if raw_framer_to is not None:
+            if raw_framer_to <= 0.0:
+                raise ValueError("framer_operation_timeout_seconds must be strictly greater than 0.0")
+            self.framer_operation_timeout_seconds: Optional[float] = float(raw_framer_to)
+        else:
+            self.framer_operation_timeout_seconds = None
 
     @classmethod
     def _build_default_engine(cls) -> QuestionUnderstandingEngine:
@@ -189,12 +213,14 @@ class AnalysisService:
         self,
         request: AnalysisRequest,
         deadline_monotonic: Optional[float] = None,
+        stage_callback: Optional[Callable[[str], None]] = None,
     ) -> AnalysisResponse:
         """Executes decision deconstruction, evidence gathering, provenance auditing, and boardroom deliberation.
 
         Args:
             request: Validated AnalysisRequest payload.
             deadline_monotonic: Optional absolute monotonic deadline for the entire analysis.
+            stage_callback: Optional callback receiving current pipeline stage name.
 
         Returns:
             AnalysisResponse containing generated analysis_id, status="completed",
@@ -216,13 +242,31 @@ class AnalysisService:
                 raise AnalysisTimeoutError("Analysis operation exceeded end-to-end deadline before deconstruction.")
 
             # 1. Deconstruct inquiry into canonical DecisionModel
+            if stage_callback:
+                stage_callback("stage1_decision_framer")
+
+            framer_config = None
+            if self.framer_operation_timeout_seconds is not None:
+                framer_config = LLMConfig(operation_timeout_seconds=self.framer_operation_timeout_seconds)
+
+            deconstruct_kwargs: Dict[str, Any] = {
+                "question": request.question,
+                "context": request.context,
+                "constraints": request.constraints,
+                "deadline_monotonic": effective_deadline,
+            }
+            if framer_config is not None:
+                deconstruct_kwargs["config"] = framer_config
+
             try:
-                decision_model = self.engine.deconstruct(
-                    question=request.question,
-                    context=request.context,
-                    constraints=request.constraints,
-                    deadline_monotonic=effective_deadline,
-                )
+                try:
+                    decision_model = self.engine.deconstruct(**deconstruct_kwargs)
+                except TypeError as te:
+                    if "unexpected keyword argument 'config'" in str(te):
+                        deconstruct_kwargs.pop("config", None)
+                        decision_model = self.engine.deconstruct(**deconstruct_kwargs)
+                    else:
+                        raise
             except TypeError as te:
                 if "unexpected keyword argument 'deadline_monotonic'" in str(te):
                     decision_model = self.engine.deconstruct(
@@ -237,6 +281,9 @@ class AnalysisService:
                 raise AnalysisTimeoutError("Analysis operation exceeded end-to-end deadline before evidence gathering.")
 
             # 2. Gather, normalize, map, and gap-analyze evidence
+            if stage_callback:
+                stage_callback("stage2_evidence_engine")
+
             try:
                 evidence_package = self.evidence_service.build_evidence_package(
                     decision_model=decision_model,
@@ -254,6 +301,8 @@ class AnalysisService:
                 raise AnalysisTimeoutError("Analysis operation exceeded end-to-end deadline before boardroom deliberation.")
 
             # 3. Deliberate across canonical boardroom perspectives and synthesize board
+            if stage_callback:
+                stage_callback("stage3_ai_boardroom")
             try:
                 reasoning_board = self.reasoning_service.build_reasoning_board(
                     decision_model=decision_model,
@@ -281,7 +330,20 @@ class AnalysisService:
             )
 
         except (LLMTimeoutError, SearchTimeoutError, AnalysisTimeoutError) as e:
-            logger.error("Analysis %s timed out during evaluation", analysis_id)
+            elapsed = time.monotonic() - start_time
+            remaining = max(0.0, effective_deadline - time.monotonic())
+            details = getattr(e, "details", None) or {}
+            timeout_src = details.get("timeout_source", "unknown")
+            attempts = details.get("attempt")
+            logger.error(
+                "Analysis %s timed out during evaluation: timeout_type=%s, timeout_source=%s, attempts=%s, elapsed=%.2fs, remaining_budget=%.2fs",
+                analysis_id,
+                type(e).__name__,
+                timeout_src,
+                attempts,
+                elapsed,
+                remaining,
+            )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail="Decision analysis timed out while evaluating the inquiry.",
@@ -317,8 +379,24 @@ class AnalysisService:
 
         except (SearchProviderError, EvidenceServiceError) as e:
             # Check for timeout failures in causal chain first
-            if _find_cause_instance(e, (SearchTimeoutError, LLMTimeoutError, AnalysisTimeoutError)):
-                logger.error("Analysis %s evidence stage timed out", analysis_id)
+            timeout_cause = _find_cause_instance(e, (SearchTimeoutError, LLMTimeoutError, AnalysisTimeoutError))
+            if timeout_cause is not None:
+                elapsed = time.monotonic() - start_time
+                remaining = max(0.0, effective_deadline - time.monotonic())
+                substage = getattr(e, "stage", None) or "evidence_engine"
+                details = getattr(timeout_cause, "details", None) or {}
+                timeout_src = details.get("timeout_source", "unknown")
+                attempts = details.get("attempt")
+                logger.error(
+                    "Analysis %s evidence stage timed out: substage=%s, timeout_type=%s, timeout_source=%s, attempts=%s, elapsed=%.2fs, remaining_budget=%.2fs",
+                    analysis_id,
+                    substage,
+                    type(timeout_cause).__name__,
+                    timeout_src,
+                    attempts,
+                    elapsed,
+                    remaining,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail="Decision analysis timed out while evaluating the inquiry.",
@@ -369,11 +447,24 @@ class AnalysisService:
 
         except ReasoningError as e:
             # 1. Check for timeout in cause chain or reasoning-level timeout
-            if (
-                _find_cause_instance(e, (LLMTimeoutError, AnalysisTimeoutError))
-                or _is_timeout_error(e)
-            ):
-                logger.error("Analysis %s reasoning stage timed out", analysis_id)
+            timeout_cause = _find_cause_instance(e, (LLMTimeoutError, AnalysisTimeoutError)) or (e if _is_timeout_error(e) else None)
+            if timeout_cause is not None:
+                elapsed = time.monotonic() - start_time
+                remaining = max(0.0, effective_deadline - time.monotonic())
+                substage = getattr(e, "stage", None) or "boardroom"
+                details = getattr(timeout_cause, "details", None) or {}
+                timeout_src = details.get("timeout_source", "unknown")
+                attempts = details.get("attempt")
+                logger.error(
+                    "Analysis %s reasoning stage timed out: substage=%s, timeout_type=%s, timeout_source=%s, attempts=%s, elapsed=%.2fs, remaining_budget=%.2fs",
+                    analysis_id,
+                    substage,
+                    type(timeout_cause).__name__,
+                    timeout_src,
+                    attempts,
+                    elapsed,
+                    remaining,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail="Decision analysis timed out while evaluating the inquiry.",
@@ -438,10 +529,12 @@ class AnalysisService:
             raise
 
         except Exception as e:
+            tb_str = "".join(traceback.format_tb(e.__traceback__)) if e.__traceback__ else ""
             logger.error(
-                "Analysis %s encountered unexpected failure of type %s",
+                "Analysis %s encountered unexpected failure of type %s:\n%s",
                 analysis_id,
                 type(e).__name__,
+                tb_str,
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -458,7 +551,8 @@ def get_question_understanding_engine(
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> QuestionUnderstandingEngine:
     """FastAPI dependency provider for QuestionUnderstandingEngine."""
-    return QuestionUnderstandingEngine(llm_client=llm_client)
+    client = None if isinstance(llm_client, DependsParam) else llm_client
+    return QuestionUnderstandingEngine(llm_client=client or get_llm_client())
 
 
 def get_search_provider() -> SearchProvider:
@@ -475,9 +569,11 @@ def get_evidence_service(
     search_provider: SearchProvider = Depends(get_search_provider),
 ) -> EvidenceService:
     """FastAPI dependency provider for EvidenceService."""
+    client = None if isinstance(llm_client, DependsParam) else llm_client
+    provider = None if isinstance(search_provider, DependsParam) else search_provider
     return EvidenceService.create_default(
-        llm_client=llm_client,
-        search_provider=search_provider,
+        llm_client=client or get_llm_client(),
+        search_provider=provider or get_search_provider(),
     )
 
 
@@ -485,8 +581,9 @@ def get_reasoning_service(
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> ReasoningService:
     """FastAPI dependency provider for ReasoningService."""
+    client = None if isinstance(llm_client, DependsParam) else llm_client
     return ReasoningService.create_default(
-        llm_client=llm_client,
+        llm_client=client or get_llm_client(),
     )
 
 
@@ -496,8 +593,29 @@ def get_analysis_service(
     reasoning_service: ReasoningService = Depends(get_reasoning_service),
 ) -> AnalysisService:
     """FastAPI dependency provider for AnalysisService."""
+    if (
+        not isinstance(engine, DependsParam)
+        and not isinstance(evidence_service, DependsParam)
+        and not isinstance(reasoning_service, DependsParam)
+    ):
+        return AnalysisService(
+            engine=engine,
+            evidence_service=evidence_service,
+            reasoning_service=reasoning_service,
+        )
+
+    # When called directly outside FastAPI (e.g. background job worker)
+    try:
+        from app.main import app
+
+        if get_analysis_service in app.dependency_overrides:
+            override = app.dependency_overrides[get_analysis_service]
+            return override() if callable(override) else override
+    except Exception:
+        pass
+
     return AnalysisService(
-        engine=engine,
-        evidence_service=evidence_service,
-        reasoning_service=reasoning_service,
+        engine=None if isinstance(engine, DependsParam) else engine,
+        evidence_service=None if isinstance(evidence_service, DependsParam) else evidence_service,
+        reasoning_service=None if isinstance(reasoning_service, DependsParam) else reasoning_service,
     )

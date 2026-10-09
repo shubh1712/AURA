@@ -426,12 +426,12 @@ def test_09_budget_boundary_exactly_at_limit_processed() -> None:
     )
     mapper = EvidenceMapper(llm_client=client)
     assert mapper.max_batches == MAX_EVIDENCE_MAPPING_BATCHES  # 6
-    assert mapper.batch_size == EVIDENCE_MAPPING_BATCH_SIZE    # 5
+    assert mapper.batch_size == EVIDENCE_MAPPING_BATCH_SIZE    # 3
 
     dm = _create_decision_model()
     req = _create_requirement()
-    # Exactly 30 sources = exactly 6 batches of 5
-    sources = [_create_source(i) for i in range(1, 31)]
+    # Exactly 18 sources = exactly 6 batches of 3 (at budget limit)
+    sources = [_create_source(i) for i in range(1, 19)]
 
     result = mapper.map_evidence(dm, [req], sources)
 

@@ -13,12 +13,13 @@ Deconstruct inquiries into structured decision models without recommendation or 
 
 Analytical Principles:
 1. Grounding: Preserve user numerical values. Distinguish user_provided facts from inferred deductions. Never invent unsupported facts or metrics.
-2. Variables: The 'unit' field must be strictly the unit symbol itself (e.g. '%' or 'USD'), at most 10 characters, never combined with metadata or commentary.
-3. Constraints: User-stated boundaries are hard (is_hard_constraint=true); inferred operational limits are soft (is_hard_constraint=false).
+2. Variables: For 'unit', output a short measurement symbol or abbreviation, no longer than 10 characters, such as '%', 'USD', 'USD/mo', 'users', or 'months'. Use JSON null when no accurate short unit is available. Do not return prose descriptions or explanations in this field.
+3. Constraints: All materially distinct user-stated boundaries must be preserved as hard constraints (is_hard_constraint=true). Inferred operational limits are soft (is_hard_constraint=false).
 4. Rigor & Tradeoffs: Frame core tensions between upsides and downsides without inventing unverified metrics. Isolate unverified premises as assumptions and empirical gaps as unknowns.
-5. Ambiguity: For vague inquiries, capture missing dimensions in key_questions and unknowns rather than guessing.
-6. Bounded Granularity: Generate 1-2 high-priority items per collection (objectives, variables, constraints, stakeholders, tradeoffs, assumptions, unknowns, key questions). Output direct values only without internal deliberation.
+5. Ambiguity & Unknowns: For missing or unverified dimensions, capture factual gaps in unknowns and key_questions rather than guessing.
+6. Bounded Granularity & Conciseness: Write concise, direct descriptions without conversational filler. Prioritize high-impact, nonredundant entities (typically 1–3 per collection for focused inquiries), while including all entities necessary for completeness. Avoid duplicate or speculative items. Output direct JSON values only without internal deliberation.
 """
+
 
 
 def build_decomposition_prompt(

@@ -7,6 +7,7 @@ import { EvidenceOverview } from "./evidence/EvidenceOverview";
 import { RequirementList } from "./evidence/RequirementList";
 import { EvidenceGapsSection } from "./evidence/EvidenceGapsSection";
 import { SourceList } from "./evidence/SourceList";
+import { ReasoningBoardSection } from "./boardroom/ReasoningBoardSection";
 
 interface AnalysisResultCardProps {
   result: AnalysisResponse;
@@ -28,6 +29,7 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
 
   const hasDecisionModel = Boolean(result.decision_model);
   const hasEvidencePackage = Boolean(result.evidence_package);
+  const hasReasoningBoard = Boolean(result.reasoning_board);
 
   return (
     <div className="space-y-8">
@@ -153,10 +155,21 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
         </div>
       )}
 
-      {/* Fallback note if neither model nor evidence was returned */}
-      {!hasDecisionModel && !hasEvidencePackage && (
+      {/* 4. AI Boardroom Deliberation */}
+      {hasReasoningBoard && result.reasoning_board && (
+        <section aria-label="AI Boardroom Deliberation">
+          <ReasoningBoardSection
+            board={result.reasoning_board}
+            evidencePackage={result.evidence_package}
+            decisionModel={result.decision_model}
+          />
+        </section>
+      )}
+
+      {/* Fallback note if model, evidence, and board are all missing */}
+      {!hasDecisionModel && !hasEvidencePackage && !hasReasoningBoard && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-6 text-center text-xs text-zinc-500">
-          No structured decision model or evidence package was returned for this analysis.
+          No structured decision model, evidence package, or boardroom deliberation was returned for this analysis.
         </div>
       )}
 

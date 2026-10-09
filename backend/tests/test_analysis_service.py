@@ -2,6 +2,7 @@
 
 import uuid
 from fastapi import HTTPException
+from fastapi.params import Depends as DependsParam
 from fastapi.testclient import TestClient
 import pytest
 
@@ -11,6 +12,8 @@ from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
 from app.services.analysis_service import AnalysisService, get_analysis_service
+from app.services.evidence import EvidenceService
+from app.services.reasoning import ReasoningService
 from app.services.llm.client import (
     LLMAuthenticationError,
     LLMError,
@@ -58,9 +61,15 @@ def test_analysis_service_generates_unique_ids() -> None:
 
 
 def test_get_analysis_service_provider() -> None:
-    """Unit test: Verify dependency injection provider returns AnalysisService instance."""
+    """Unit test: Verify dependency injection provider returns AnalysisService instance with real subcomponents."""
     provider_instance = get_analysis_service()
     assert isinstance(provider_instance, AnalysisService)
+    assert not isinstance(provider_instance.engine, DependsParam)
+    assert isinstance(provider_instance.engine, QuestionUnderstandingEngine)
+    assert not isinstance(provider_instance.evidence_service, DependsParam)
+    assert isinstance(provider_instance.evidence_service, EvidenceService)
+    assert not isinstance(provider_instance.reasoning_service, DependsParam)
+    assert isinstance(provider_instance.reasoning_service, ReasoningService)
 
 
 def test_analysis_service_llm_auth_error_raises_503(caplog: pytest.LogCaptureFixture) -> None:
@@ -300,3 +309,114 @@ def test_route_integration_error_handling(client: TestClient) -> None:
         assert "authentication failed" in data["detail"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_analysis_service_evidence_timeout_structured_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies that an EvidenceServiceError wrapping LLMTimeoutError logs structured substage, attempts, and budget diagnostics."""
+    from unittest.mock import MagicMock
+    import logging
+    from app.services.evidence import EvidenceServiceError
+
+    mock_engine = MagicMock()
+    mock_model = MagicMock()
+    mock_engine.deconstruct.return_value = mock_model
+
+    mock_evidence = MagicMock()
+    llm_err = LLMTimeoutError(
+        "Gemini API request timed out after 60.0s.",
+        details={"timeout_source": "operation", "attempt": 2, "timeout": 60.0},
+    )
+    mock_evidence.build_evidence_package.side_effect = EvidenceServiceError(
+        "Evidence orchestration failed at stage 'mapping': Gemini API request timed out",
+        stage="mapping",
+    )
+    mock_evidence.build_evidence_package.side_effect.__cause__ = llm_err
+
+    service = AnalysisService(
+        engine=mock_engine,
+        evidence_service=mock_evidence,
+        analysis_timeout_seconds=180.0,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc_info:
+            service.analyze(AnalysisRequest(question="Should we reduce pricing?"))
+
+    assert exc_info.value.status_code == 504
+    assert "Decision analysis timed out" in exc_info.value.detail
+    log_text = caplog.text
+    assert "evidence stage timed out" in log_text
+    assert "substage=mapping" in log_text
+    assert "timeout_type=LLMTimeoutError" in log_text
+    assert "timeout_source=operation" in log_text
+    assert "attempts=2" in log_text
+    assert "elapsed=" in log_text
+    assert "remaining_budget=" in log_text
+
+
+def test_analysis_service_direct_timeout_structured_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies that direct LLMTimeoutError logs structured timeout_type, timeout_source, and budget diagnostics."""
+    from unittest.mock import MagicMock
+    import logging
+
+    mock_engine = MagicMock()
+    mock_engine.deconstruct.side_effect = LLMTimeoutError(
+        "Gemini API request timed out after 60.0s.",
+        details={"timeout_source": "operation", "attempt": 1, "timeout": 60.0},
+    )
+
+    service = AnalysisService(
+        engine=mock_engine,
+        analysis_timeout_seconds=120.0,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc_info:
+            service.analyze(AnalysisRequest(question="Should we reduce pricing?"))
+
+    assert exc_info.value.status_code == 504
+    log_text = caplog.text
+    assert "timed out during evaluation" in log_text
+    assert "timeout_type=LLMTimeoutError" in log_text
+    assert "timeout_source=operation" in log_text
+    assert "attempts=1" in log_text
+    assert "elapsed=" in log_text
+    assert "remaining_budget=" in log_text
+
+
+def test_evidence_service_substage_failure_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies that EvidenceService logs substage failures with elapsed time and exception type."""
+    from unittest.mock import MagicMock
+    import logging
+    from app.services.evidence.service import EvidenceService, EvidenceServiceError
+
+    mock_req_engine = MagicMock()
+    mock_retriever = MagicMock()
+    mock_normalizer = MagicMock()
+    mock_mapper = MagicMock()
+    mock_gap_detector = MagicMock()
+
+    mock_req_engine.generate_requirements.side_effect = LLMTimeoutError(
+        "Gemini API request timed out after 60.0s.",
+        details={"timeout_source": "operation", "attempt": 2},
+    )
+
+    ev_service = EvidenceService(
+        requirement_engine=mock_req_engine,
+        retriever=mock_retriever,
+        normalizer=mock_normalizer,
+        mapper=mock_mapper,
+        gap_detector=mock_gap_detector,
+    )
+
+    mock_model = MagicMock()
+    mock_model.id = "mod_test_substage"
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(EvidenceServiceError) as exc_info:
+            ev_service.build_evidence_package(decision_model=mock_model)
+
+    assert exc_info.value.stage == "requirement_generation"
+    assert "requirement_generation" in caplog.text
+    assert "LLMTimeoutError" in caplog.text
+    assert "failed after" in caplog.text

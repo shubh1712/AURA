@@ -962,3 +962,150 @@ def test_46_max_workers_validation():
         PerspectiveOrchestrator(reasoner=reasoner, max_workers=0)
 
     assert "max_workers must be at least 1" in str(exc_info.value)
+
+
+# ==============================================================================
+# 8. Four-Worker Concurrency Invariants (Phase 4.12)
+# ==============================================================================
+
+def test_47_all_four_perspectives_start_concurrently():
+    """Proves all four canonical perspectives genuinely start concurrently via a 4-party barrier."""
+    dm, ep, persps = build_test_artifacts()
+    barrier = threading.Barrier(4, timeout=3.0)
+    reasoner = ControlledMockReasoner(persps, barrier=barrier)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    results = orchestrator.evaluate_all(dm, ep)
+
+    assert len(results) == 4
+    assert reasoner.max_active_workers == 4
+    assert len(reasoner.calls) == 4
+
+
+def test_48_max_active_workers_never_exceeds_four():
+    """Proves that active workers never exceed 4 even if max_workers is set higher."""
+    dm, ep, persps = build_test_artifacts()
+    barrier = threading.Barrier(4, timeout=3.0)
+    reasoner = ControlledMockReasoner(persps, barrier=barrier)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=8)
+
+    results = orchestrator.evaluate_all(dm, ep)
+
+    assert len(results) == 4
+    assert reasoner.max_active_workers == 4
+
+
+def test_49_every_perspective_receives_identical_absolute_deadline():
+    """Proves all four concurrent workers receive the exact identical parent deadline_monotonic."""
+    dm, ep, persps = build_test_artifacts()
+    reasoner = ControlledMockReasoner(persps)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    test_deadline = time.monotonic() + 45.0
+    orchestrator.evaluate_all(dm, ep, deadline_monotonic=test_deadline)
+
+    assert len(reasoner.calls) == 4
+    for _, deadline in reasoner.calls:
+        assert deadline == test_deadline
+
+
+def test_50_final_perspective_order_remains_canonical_under_four_workers():
+    """Proves returned tuple is strictly Growth, Finance, Customer, Risk even with reverse completion."""
+    dm, ep, persps = build_test_artifacts()
+    ev_risk = threading.Event()
+    ev_cust = threading.Event()
+    ev_fin = threading.Event()
+    ev_grow = threading.Event()
+
+    sync_events = {
+        PerspectiveType.RISK: ev_risk,
+        PerspectiveType.CUSTOMER: ev_cust,
+        PerspectiveType.FINANCE: ev_fin,
+        PerspectiveType.GROWTH: ev_grow,
+    }
+
+    reasoner = ControlledMockReasoner(persps, sync_events=sync_events)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    def release_reverse():
+        ev_risk.set()
+        ev_cust.set()
+        ev_fin.set()
+        ev_grow.set()
+
+    t = threading.Thread(target=release_reverse)
+    t.start()
+
+    results = orchestrator.evaluate_all(dm, ep)
+    t.join()
+
+    assert [p.perspective_type for p in results] == [
+        PerspectiveType.GROWTH,
+        PerspectiveType.FINANCE,
+        PerspectiveType.CUSTOMER,
+        PerspectiveType.RISK,
+    ]
+
+
+def test_51_any_perspective_failure_aborts_board_safely():
+    """Proves any worker failure fail-closes the orchestration and propagates typed error safely."""
+    dm, ep, persps = build_test_artifacts()
+    err = RuntimeError("Simulated failure in Finance perspective")
+    reasoner = ControlledMockReasoner(persps, raise_by_type={PerspectiveType.FINANCE: err})
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    with pytest.raises(ReasoningOrchestrationError) as exc_info:
+        orchestrator.evaluate_all(dm, ep)
+
+    assert "finance" in str(exc_info.value).lower()
+    assert exc_info.value.__cause__ is err
+
+
+def test_52_deadline_expiration_fails_closed():
+    """Proves pre-expired or in-flight expired deadline terminates cleanly with LLMTimeoutError."""
+    dm, ep, persps = build_test_artifacts()
+    reasoner = ControlledMockReasoner(persps)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    expired_deadline = time.monotonic() - 1.0
+    with pytest.raises(ReasoningOrchestrationError) as exc_info:
+        orchestrator.evaluate_all(dm, ep, deadline_monotonic=expired_deadline)
+
+    assert "timed out" in str(exc_info.value).lower() or "deadline" in str(exc_info.value).lower()
+    assert isinstance(exc_info.value.__cause__, LLMTimeoutError)
+    assert len(reasoner.calls) == 0
+
+
+def test_53_shared_llm_client_identity_unchanged_under_four_workers():
+    """Proves ReasoningService factory wires the identical LLMClient instance across all sub-services."""
+    from app.services.llm.client import FakeLLMClient
+    from app.services.reasoning.service import ReasoningService
+
+    fake_client = FakeLLMClient()
+    svc = ReasoningService.create_default(llm_client=fake_client, max_workers=4)
+
+    assert svc.orchestrator.max_workers == 4
+    assert svc.orchestrator.reasoner.llm_client is fake_client
+    assert svc.synthesizer.llm_client is fake_client
+
+
+def test_54_no_extra_llm_calls_or_perspectives_introduced():
+    """Proves 4 workers execute exactly 4 calls and produce exactly 4 canonical perspectives."""
+    dm, ep, persps = build_test_artifacts()
+    reasoner = ControlledMockReasoner(persps)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=4)
+
+    results = orchestrator.evaluate_all(dm, ep)
+
+    assert len(reasoner.calls) == 4
+    assert len(results) == 4
+    assert set(p.id for p in results) == set(persps[t].id for t in persps)
+
+
+def test_55_default_constant_is_four():
+    """Proves MAX_PERSPECTIVE_WORKERS constant and default orchestrator ceiling are 4."""
+    assert MAX_PERSPECTIVE_WORKERS == 4
+    _, _, persps = build_test_artifacts()
+    reasoner = ControlledMockReasoner(persps)
+    orchestrator = PerspectiveOrchestrator(reasoner=reasoner)
+    assert orchestrator.max_workers == 4

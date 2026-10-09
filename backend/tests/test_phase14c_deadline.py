@@ -472,8 +472,8 @@ def test_j_operation_deadline_shorter_than_analysis_budget_capped_at_60s() -> No
     )
 
     assert len(recorded_timeouts) == 1
-    # Per-request HTTP timeout is capped at cfg.timeout_seconds (45.0), not 120.0
-    assert recorded_timeouts[0] == 45.0
+    # Per-request HTTP timeout is capped at cfg.timeout_seconds (30.0), not 120.0
+    assert recorded_timeouts[0] == 30.0
 
 
 # ------------------------------------------------------------------------------
@@ -616,5 +616,5 @@ def test_o_callers_without_parent_deadline_retain_phase14a_semantics() -> None:
     )
 
     assert len(recorded_timeouts) == 1
-    # Uses Phase 14A default timeout_seconds = 45.0
-    assert recorded_timeouts[0] == 45.0
+    # Uses Phase 4.27 default timeout_seconds = 30.0
+    assert recorded_timeouts[0] == 30.0
