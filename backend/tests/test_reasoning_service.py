@@ -544,20 +544,25 @@ def test_12_deadline_not_reset_between_stages():
 def test_13_deadline_expiry_after_perspective_stage_prevents_disagreement_detection(monkeypatch):
     dm, ep, persps, diss, synth = build_test_artifacts()
 
+    current_time = 100.0
+    monkeypatch.setattr(time, "monotonic", lambda: current_time)
+
     # Orchestrator runs, then deadline expires
     def expire_deadline():
-        time.sleep(0.01)
+        nonlocal current_time
+        current_time = 110.0
 
     orchestrator = SpyPerspectiveOrchestrator(persps, on_evaluate=expire_deadline)
     synthesizer = SpyBoardSynthesizer(synth)
     service = ReasoningService(orchestrator=orchestrator, synthesizer=synthesizer)
 
     # Deadline that will expire during orchestrator execution
-    deadline = time.monotonic() + 0.005
+    deadline = 105.0
     with pytest.raises(ReasoningServiceError) as exc_info:
         service.build_reasoning_board(dm, ep, deadline_monotonic=deadline)
 
     assert exc_info.value.stage in ("perspectives", "disagreements")
+    assert len(synthesizer.calls) == 0
 
 
 def test_14_deadline_expiry_before_synthesis_prevents_synthesis_call(monkeypatch):

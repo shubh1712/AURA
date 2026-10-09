@@ -192,7 +192,11 @@ def test_3_no_partial_result_exposure(test_storage: SQLiteJobStorage) -> None:
             manager.get_job_result(job.job_id)
 
         assert exc_info.value.status_code == 409
-        assert "not yet completed" in exc_info.value.detail or "running" in exc_info.value.detail
+        assert (
+            "not yet completed" in exc_info.value.detail
+            or "running" in exc_info.value.detail
+            or "queued" in exc_info.value.detail
+        )
     finally:
         manager.shutdown(wait=True)
 
