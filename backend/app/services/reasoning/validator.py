@@ -118,6 +118,67 @@ def clean_id_list(ids: Optional[Sequence[str]]) -> List[str]:
     return cleaned
 
 
+def resolve_canonical_id(
+    candidate_id: str,
+    valid_ids: Set[str],
+    conflicting_ids: Optional[Set[str]] = None,
+) -> Optional[str]:
+    """Deterministically resolves a candidate ID against an authoritative ID set.
+
+    Allows exact matches or unambiguous canonical IDs followed by stray trailing prose/punctuation.
+    Strictly rejects:
+    - Nonexistent IDs (no matching canonical ID exists).
+    - Arbitrary prefixes or partial matches (e.g., 'unk_foo' will NOT match 'unk_foobar').
+    - Ambiguous references (e.g. multiple canonical IDs, or matches in conflicting ID namespaces).
+    - Fabricated or hallucinated IDs.
+    """
+    if not isinstance(candidate_id, str):
+        return None
+
+    cleaned = candidate_id.strip()
+    if not cleaned:
+        return None
+
+    # 1. Exact match fast path
+    if cleaned in valid_ids:
+        return cleaned
+
+    # Strip surrounding single or double quotes if present (e.g. "'unk_123'" -> "unk_123")
+    unquoted = cleaned.strip("'\"")
+    if unquoted in valid_ids:
+        return unquoted
+
+    # 2. Extract leading identifier token delimited by whitespace or non-identifier characters.
+    # Canonical IDs in AURA consist of alphanumeric characters and underscores/hyphens.
+    match = re.match(r"^['\"]?([a-zA-Z0-9_-]+)['\"]?(.*)$", cleaned)
+    if not match:
+        return None
+
+    leading_token = match.group(1)
+    trailing_prose = match.group(2)
+
+    # The leading token MUST exactly match a known canonical ID in valid_ids.
+    # This strictly prevents prefix or partial guessing (e.g. 'unk_foo' cannot match 'unk_foobar').
+    if leading_token not in valid_ids:
+        return None
+
+    # If there is trailing prose, ensure delimiter is whitespace or punctuation (not alphanumeric)
+    if trailing_prose:
+        first_char = trailing_prose.lstrip("'\"")[:1]
+        if first_char and first_char.isalnum():
+            # If the character immediately following is alphanumeric, this wasn't an isolated token
+            return None
+
+        # Inspect trailing tokens to ensure no other canonical or conflicting IDs appear (rejects ambiguity).
+        trailing_tokens = set(re.findall(r"[a-zA-Z0-9_-]+", trailing_prose))
+        if any(t in valid_ids for t in trailing_tokens):
+            return None
+        if conflicting_ids and any(t in conflicting_ids for t in trailing_tokens):
+            return None
+
+    return leading_token
+
+
 def validate_and_reconcile_candidate_perspective(
     candidate: CandidatePerspectiveAnalysis,
     context: PerspectiveContext,
@@ -190,29 +251,49 @@ def validate_and_reconcile_candidate_perspective(
     clean_top_asms = clean_id_list(candidate.critical_assumption_ids)
     clean_top_gaps = clean_id_list(candidate.evidence_gap_ids)
 
+    resolved_top_asms: List[str] = []
     for aid in clean_top_asms:
-        if aid not in valid_assumption_ids:
-            raise ReasoningValidationError(
-                f"Perspective '{expected_type.value}' references nonexistent critical assumption_id '{aid}'.",
-                details={
-                    "location": "validator.top_level_references",
-                    "field": "candidate.critical_assumption_ids",
-                    "rule": "nonexistent_critical_assumption_id",
-                    "invalid_id": str(aid)[:50],
-                },
-            )
+        if aid in valid_assumption_ids:
+            if aid not in resolved_top_asms:
+                resolved_top_asms.append(aid)
+        else:
+            resolved = resolve_canonical_id(aid, valid_assumption_ids)
+            if resolved:
+                if resolved not in resolved_top_asms:
+                    resolved_top_asms.append(resolved)
+            else:
+                raise ReasoningValidationError(
+                    f"Perspective '{expected_type.value}' references nonexistent critical assumption_id '{aid}'.",
+                    details={
+                        "location": "validator.top_level_references",
+                        "field": "candidate.critical_assumption_ids",
+                        "rule": "nonexistent_critical_assumption_id",
+                        "invalid_id": str(aid)[:50],
+                    },
+                )
+    clean_top_asms = resolved_top_asms
 
+    resolved_top_gaps: List[str] = []
     for gid in clean_top_gaps:
-        if gid not in valid_gap_ids:
-            raise ReasoningValidationError(
-                f"Perspective '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
-                details={
-                    "location": "validator.top_level_references",
-                    "field": "candidate.evidence_gap_ids",
-                    "rule": "nonexistent_evidence_gap_id",
-                    "invalid_id": str(gid)[:50],
-                },
-            )
+        if gid in valid_gap_ids:
+            if gid not in resolved_top_gaps:
+                resolved_top_gaps.append(gid)
+        else:
+            resolved = resolve_canonical_id(gid, valid_gap_ids)
+            if resolved:
+                if resolved not in resolved_top_gaps:
+                    resolved_top_gaps.append(resolved)
+            else:
+                raise ReasoningValidationError(
+                    f"Perspective '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
+                    details={
+                        "location": "validator.top_level_references",
+                        "field": "candidate.evidence_gap_ids",
+                        "rule": "nonexistent_evidence_gap_id",
+                        "invalid_id": str(gid)[:50],
+                    },
+                )
+    clean_top_gaps = resolved_top_gaps
 
     # 4. Validate Each Candidate Argument
     validated_arguments: List[ReasoningArgument] = []
@@ -228,41 +309,71 @@ def validate_and_reconcile_candidate_perspective(
         clean_reids = clean_id_list(arg.related_entity_ids)
 
         # 4a. Reference ID Resolution (Reject Hallucinated IDs)
+        resolved_eids: List[str] = []
         for eid in clean_eids:
-            if eid not in valid_evidence_item_ids:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_item_id '{eid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].evidence_item_ids",
-                        "rule": "nonexistent_evidence_item_id",
-                        "invalid_id": str(eid)[:50],
-                    },
-                )
+            if eid in valid_evidence_item_ids:
+                if eid not in resolved_eids:
+                    resolved_eids.append(eid)
+            else:
+                resolved = resolve_canonical_id(eid, valid_evidence_item_ids)
+                if resolved:
+                    if resolved not in resolved_eids:
+                        resolved_eids.append(resolved)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent evidence_item_id '{eid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].evidence_item_ids",
+                            "rule": "nonexistent_evidence_item_id",
+                            "invalid_id": str(eid)[:50],
+                        },
+                    )
+        clean_eids = resolved_eids
 
+        resolved_rids: List[str] = []
         for rid in clean_rids:
-            if rid not in valid_requirement_ids:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent requirement_id '{rid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].requirement_ids",
-                        "rule": "nonexistent_requirement_id",
-                        "invalid_id": str(rid)[:50],
-                    },
-                )
+            if rid in valid_requirement_ids:
+                if rid not in resolved_rids:
+                    resolved_rids.append(rid)
+            else:
+                resolved = resolve_canonical_id(rid, valid_requirement_ids)
+                if resolved:
+                    if resolved not in resolved_rids:
+                        resolved_rids.append(resolved)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent requirement_id '{rid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].requirement_ids",
+                            "rule": "nonexistent_requirement_id",
+                            "invalid_id": str(rid)[:50],
+                        },
+                    )
+        clean_rids = resolved_rids
 
+        resolved_aids: List[str] = []
         for aid in clean_aids:
-            if aid not in valid_assumption_ids:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent assumption_id '{aid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].assumption_ids",
-                        "rule": "nonexistent_assumption_id",
-                        "invalid_id": str(aid)[:50],
-                    },
-                )
+            if aid in valid_assumption_ids:
+                if aid not in resolved_aids:
+                    resolved_aids.append(aid)
+            else:
+                resolved = resolve_canonical_id(aid, valid_assumption_ids)
+                if resolved:
+                    if resolved not in resolved_aids:
+                        resolved_aids.append(resolved)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent assumption_id '{aid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].assumption_ids",
+                            "rule": "nonexistent_assumption_id",
+                            "invalid_id": str(aid)[:50],
+                        },
+                    )
+        clean_aids = resolved_aids
 
         resolved_uids: List[str] = []
         for uid in clean_uids:
@@ -290,40 +401,93 @@ def validate_and_reconcile_candidate_perspective(
                         },
                     )
             else:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].unknown_ids",
-                        "rule": "nonexistent_unknown_id",
-                        "invalid_id": str(uid)[:50],
-                    },
+                # Check for canonical unknown ID with stray trailing prose
+                resolved_unk = resolve_canonical_id(
+                    uid,
+                    valid_unknown_ids,
+                    conflicting_ids=set(requirements_by_id.keys()),
                 )
+                if resolved_unk:
+                    if resolved_unk not in resolved_uids:
+                        resolved_uids.append(resolved_unk)
+                else:
+                    # Check for requirement ID with stray trailing prose targeting an Unknown
+                    resolved_req = resolve_canonical_id(
+                        uid,
+                        set(requirements_by_id.keys()),
+                        conflicting_ids=valid_unknown_ids,
+                    )
+                    if resolved_req:
+                        req = requirements_by_id[resolved_req]
+                        if req.target_entity_type == DecisionEntityType.UNKNOWN and req.target_entity_id in valid_unknown_ids:
+                            canonical_uid = req.target_entity_id
+                            if canonical_uid not in resolved_uids:
+                                resolved_uids.append(canonical_uid)
+                        else:
+                            raise ReasoningValidationError(
+                                f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
+                                details={
+                                    "location": "validator.argument_references",
+                                    "field": f"candidate.arguments[{idx}].unknown_ids",
+                                    "rule": "nonexistent_unknown_id",
+                                    "invalid_id": str(uid)[:50],
+                                },
+                            )
+                    else:
+                        raise ReasoningValidationError(
+                            f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
+                            details={
+                                "location": "validator.argument_references",
+                                "field": f"candidate.arguments[{idx}].unknown_ids",
+                                "rule": "nonexistent_unknown_id",
+                                "invalid_id": str(uid)[:50],
+                            },
+                        )
         clean_uids = resolved_uids
 
+        resolved_gids: List[str] = []
         for gid in clean_gids:
-            if gid not in valid_gap_ids:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].evidence_gap_ids",
-                        "rule": "nonexistent_evidence_gap_id",
-                        "invalid_id": str(gid)[:50],
-                    },
-                )
+            if gid in valid_gap_ids:
+                if gid not in resolved_gids:
+                    resolved_gids.append(gid)
+            else:
+                resolved = resolve_canonical_id(gid, valid_gap_ids)
+                if resolved:
+                    if resolved not in resolved_gids:
+                        resolved_gids.append(resolved)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].evidence_gap_ids",
+                            "rule": "nonexistent_evidence_gap_id",
+                            "invalid_id": str(gid)[:50],
+                        },
+                    )
+        clean_gids = resolved_gids
 
+        resolved_reids: List[str] = []
         for reid in clean_reids:
-            if reid not in allowed_decision_entity_ids:
-                raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent related_entity_id '{reid}'.",
-                    details={
-                        "location": "validator.argument_references",
-                        "field": f"candidate.arguments[{idx}].related_entity_ids",
-                        "rule": "nonexistent_related_entity_id",
-                        "invalid_id": str(reid)[:50],
-                    },
-                )
+            if reid in allowed_decision_entity_ids:
+                if reid not in resolved_reids:
+                    resolved_reids.append(reid)
+            else:
+                resolved = resolve_canonical_id(reid, allowed_decision_entity_ids)
+                if resolved:
+                    if resolved not in resolved_reids:
+                        resolved_reids.append(resolved)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent related_entity_id '{reid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].related_entity_ids",
+                            "rule": "nonexistent_related_entity_id",
+                            "invalid_id": str(reid)[:50],
+                        },
+                    )
+        clean_reids = resolved_reids
 
         # 4b. Epistemic Basis Verification
         if arg.basis == ReasoningBasis.EVIDENCE:

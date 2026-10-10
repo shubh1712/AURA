@@ -45,6 +45,7 @@ from app.services.reasoning.validator import (
     ReasoningPromptError,
     ReasoningValidationError,
     clean_id_list,
+    resolve_canonical_id,
 )
 
 
@@ -362,6 +363,7 @@ def build_synthesis_system_instruction() -> str:
         "- Pending INTERNAL_DATA, USER_CLARIFICATION, or DETERMINISTIC_CALCULATION requirements "
         "must remain pending.\n\n"
         "=== REFERENCE GROUNDING CONTRACT ===\n"
+        "- Copy exact canonical IDs only. NEVER append explanatory text, prose, notes, or punctuation to ID strings.\n"
         "- disagreement_ids: Select ONLY from the authoritative disagreement IDs (starting with 'dis_') supplied in context. If no explicit disagreements were detected, you MUST provide an empty array [].\n"
         "- critical_assumption_ids: Select ONLY from the authoritative assumption IDs (starting with 'asm_') supplied in context. If none apply, use [].\n"
         "- critical_evidence_gap_ids: Select ONLY from the authoritative evidence gap IDs (starting with 'gap_') supplied in context. If none apply, use [].\n"
@@ -522,43 +524,73 @@ def validate_candidate_synthesis(
     clean_gap_ids = clean_id_list(candidate.critical_evidence_gap_ids)
 
     # 1. Validate disagreement IDs
+    resolved_dis_ids: List[str] = []
     for did in clean_dis_ids:
-        if did not in valid_dis_ids:
-            raise ReasoningValidationError(
-                f"Candidate synthesis references nonexistent disagreement ID '{did}'.",
-                details={
-                    "location": "synthesizer.validate_candidate_synthesis",
-                    "field": "candidate.disagreement_ids",
-                    "rule": "nonexistent_disagreement_id",
-                    "invalid_id": str(did)[:50],
-                },
-            )
+        if did in valid_dis_ids:
+            if did not in resolved_dis_ids:
+                resolved_dis_ids.append(did)
+        else:
+            resolved = resolve_canonical_id(did, valid_dis_ids)
+            if resolved:
+                if resolved not in resolved_dis_ids:
+                    resolved_dis_ids.append(resolved)
+            else:
+                raise ReasoningValidationError(
+                    f"Candidate synthesis references nonexistent disagreement ID '{did}'.",
+                    details={
+                        "location": "synthesizer.validate_candidate_synthesis",
+                        "field": "candidate.disagreement_ids",
+                        "rule": "nonexistent_disagreement_id",
+                        "invalid_id": str(did)[:50],
+                    },
+                )
+    clean_dis_ids = resolved_dis_ids
 
     # 2. Validate critical assumption IDs
+    resolved_asm_ids: List[str] = []
     for aid in clean_asm_ids:
-        if aid not in valid_asm_ids:
-            raise ReasoningValidationError(
-                f"Candidate synthesis references nonexistent assumption ID '{aid}'.",
-                details={
-                    "location": "synthesizer.validate_candidate_synthesis",
-                    "field": "candidate.critical_assumption_ids",
-                    "rule": "nonexistent_assumption_id",
-                    "invalid_id": str(aid)[:50],
-                },
-            )
+        if aid in valid_asm_ids:
+            if aid not in resolved_asm_ids:
+                resolved_asm_ids.append(aid)
+        else:
+            resolved = resolve_canonical_id(aid, valid_asm_ids)
+            if resolved:
+                if resolved not in resolved_asm_ids:
+                    resolved_asm_ids.append(resolved)
+            else:
+                raise ReasoningValidationError(
+                    f"Candidate synthesis references nonexistent assumption ID '{aid}'.",
+                    details={
+                        "location": "synthesizer.validate_candidate_synthesis",
+                        "field": "candidate.critical_assumption_ids",
+                        "rule": "nonexistent_assumption_id",
+                        "invalid_id": str(aid)[:50],
+                    },
+                )
+    clean_asm_ids = resolved_asm_ids
 
     # 3. Validate critical evidence gap IDs
+    resolved_gap_ids: List[str] = []
     for gid in clean_gap_ids:
-        if gid not in valid_gap_ids:
-            raise ReasoningValidationError(
-                f"Candidate synthesis references nonexistent evidence gap ID '{gid}'.",
-                details={
-                    "location": "synthesizer.validate_candidate_synthesis",
-                    "field": "candidate.critical_evidence_gap_ids",
-                    "rule": "nonexistent_evidence_gap_id",
-                    "invalid_id": str(gid)[:50],
-                },
-            )
+        if gid in valid_gap_ids:
+            if gid not in resolved_gap_ids:
+                resolved_gap_ids.append(gid)
+        else:
+            resolved = resolve_canonical_id(gid, valid_gap_ids)
+            if resolved:
+                if resolved not in resolved_gap_ids:
+                    resolved_gap_ids.append(resolved)
+            else:
+                raise ReasoningValidationError(
+                    f"Candidate synthesis references nonexistent evidence gap ID '{gid}'.",
+                    details={
+                        "location": "synthesizer.validate_candidate_synthesis",
+                        "field": "candidate.critical_evidence_gap_ids",
+                        "rule": "nonexistent_evidence_gap_id",
+                        "invalid_id": str(gid)[:50],
+                    },
+                )
+    clean_gap_ids = resolved_gap_ids
 
     # Reconcile into authoritative BoardSynthesis
     return BoardSynthesis(
