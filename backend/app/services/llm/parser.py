@@ -570,6 +570,156 @@ class StructuredOutputParser:
         return cleaned
 
     @classmethod
+    def sanitize_perspective_analysis_dict(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitizes candidate perspective analysis dictionary before Pydantic validation.
+
+        Ensures casing, whitespace, empty/placeholder collections, and epistemic basis
+        conformance to prevent spurious validation failures on LLM structured output.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = dict(data)
+
+
+
+        # 2. Normalize summary
+        summary_val = cleaned.get("summary")
+        if isinstance(summary_val, str):
+            cleaned["summary"] = summary_val.strip()
+
+        # 3. Normalize top-level list fields
+        for field in [
+            "critical_assumption_ids",
+            "evidence_gap_ids",
+            "unresolved_questions",
+            "limitations",
+            "opportunities",
+            "concerns",
+        ]:
+            val = cleaned.get(field)
+            if val is None:
+                cleaned[field] = []
+            elif isinstance(val, list):
+                cleaned[field] = [
+                    str(item).strip()
+                    for item in val
+                    if isinstance(item, (str, int, float)) and str(item).strip().lower() not in ("", "none", "null", "n/a", "undefined")
+                ]
+            elif isinstance(val, str):
+                cleaned[field] = [] if val.strip().lower() in ("", "none", "null", "n/a", "undefined") else [val.strip()]
+
+        # 4. Normalize arguments
+        raw_args = cleaned.get("arguments")
+        if raw_args is None:
+            cleaned["arguments"] = []
+        elif isinstance(raw_args, list):
+            cleaned_args: List[Dict[str, Any]] = []
+            for arg_item in raw_args:
+                if not isinstance(arg_item, dict):
+                    continue
+                arg_copy = dict(arg_item)
+
+                # Strings
+                for str_field in ["claim", "reasoning", "caveat"]:
+                    s_val = arg_copy.get(str_field)
+                    if isinstance(s_val, str):
+                        s_stripped = s_val.strip()
+                        if str_field == "caveat" and s_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
+                            arg_copy["caveat"] = None
+                        else:
+                            arg_copy[str_field] = s_stripped
+
+                # Direction
+                d_val = arg_copy.get("direction")
+                if isinstance(d_val, str):
+                    arg_copy["direction"] = d_val.strip().lower()
+
+                # Basis
+                b_val = arg_copy.get("basis")
+                basis_str = b_val.strip().lower() if isinstance(b_val, str) else "inference"
+                arg_copy["basis"] = basis_str
+
+                # Normalize reference lists
+                for list_field in [
+                    "evidence_item_ids",
+                    "requirement_ids",
+                    "assumption_ids",
+                    "unknown_ids",
+                    "evidence_gap_ids",
+                    "related_entity_ids",
+                ]:
+                    l_val = arg_copy.get(list_field)
+                    if l_val is None:
+                        arg_copy[list_field] = []
+                    elif isinstance(l_val, list):
+                        arg_copy[list_field] = [
+                            str(item).strip()
+                            for item in l_val
+                            if isinstance(item, (str, int, float)) and str(item).strip().lower() not in ("", "none", "null", "n/a", "undefined")
+                        ]
+                    elif isinstance(l_val, str):
+                        arg_copy[list_field] = [] if l_val.strip().lower() in ("", "none", "null", "n/a", "undefined") else [l_val.strip()]
+                    else:
+                        arg_copy[list_field] = []
+
+                # Epistemic basis reconciliation without fabricating citations:
+                e_ids = arg_copy["evidence_item_ids"]
+                a_ids = arg_copy["assumption_ids"]
+                u_ids = arg_copy["unknown_ids"]
+                g_ids = arg_copy["evidence_gap_ids"]
+                r_ids = arg_copy["requirement_ids"]
+                has_unresolved = bool(u_ids or g_ids or r_ids)
+
+                if basis_str == "evidence" and not e_ids:
+                    if a_ids and not has_unresolved:
+                        arg_copy["basis"] = "assumption"
+                    elif has_unresolved and not a_ids:
+                        arg_copy["basis"] = "unresolved"
+                    elif a_ids and has_unresolved:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "assumption" and not a_ids:
+                    if e_ids and not has_unresolved:
+                        arg_copy["basis"] = "evidence"
+                    elif has_unresolved and not e_ids:
+                        arg_copy["basis"] = "unresolved"
+                    elif e_ids and has_unresolved:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "unresolved" and not has_unresolved:
+                    if e_ids and not a_ids:
+                        arg_copy["basis"] = "evidence"
+                    elif a_ids and not e_ids:
+                        arg_copy["basis"] = "assumption"
+                    elif e_ids and a_ids:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "mixed":
+                    cat_count = sum([bool(e_ids), bool(a_ids), has_unresolved])
+                    if cat_count < 2:
+                        if bool(e_ids):
+                            arg_copy["basis"] = "evidence"
+                        elif bool(a_ids):
+                            arg_copy["basis"] = "assumption"
+                        elif has_unresolved:
+                            arg_copy["basis"] = "unresolved"
+                        else:
+                            arg_copy["basis"] = "inference"
+
+                cleaned_args.append(arg_copy)
+
+            cleaned["arguments"] = cleaned_args
+
+        return cleaned
+
+    @classmethod
     def classify_validation_error(
         cls, e: ValidationError
     ) -> Tuple[str, List[str], List[str]]:
@@ -588,6 +738,7 @@ class StructuredOutputParser:
             "float_type": "numeric_type_error",
             "int_type": "numeric_type_error",
             "number_type": "numeric_type_error",
+            "value_error": "value_error",
         }
         categories: List[str] = []
         field_paths: List[str] = []
@@ -595,7 +746,22 @@ class StructuredOutputParser:
             err_type = err.get("type", "")
             cat = type_map.get(err_type, "other_pydantic_error")
             categories.append(cat)
-            loc_str = ".".join(str(loc) for loc in err.get("loc", []))
+            loc = err.get("loc", ())
+            loc_str = ".".join(str(l) for l in loc)
+            # If loc points to a sequence item without a child field name (e.g. ('arguments', 0)),
+            # inspect the message for a known child field to report precise nested field paths.
+            msg = str(err.get("msg", ""))
+            if len(loc) == 2 and isinstance(loc[1], int):
+                if "evidence_item_id" in msg:
+                    loc_str = f"{loc_str}.evidence_item_ids"
+                elif "assumption_id" in msg:
+                    loc_str = f"{loc_str}.assumption_ids"
+                elif "unresolved" in msg or "unknown_id" in msg or "evidence_gap_id" in msg:
+                    loc_str = f"{loc_str}.unknown_ids"
+                elif "mixed" in msg:
+                    loc_str = f"{loc_str}.basis"
+                elif "basis" in msg:
+                    loc_str = f"{loc_str}.basis"
             field_paths.append(loc_str)
 
         priority = [
@@ -603,6 +769,7 @@ class StructuredOutputParser:
             "missing_required_field",
             "enum_mismatch",
             "numeric_type_error",
+            "value_error",
             "other_pydantic_error",
         ]
         primary = "other_pydantic_error"
@@ -657,8 +824,19 @@ class StructuredOutputParser:
         except Exception:
             is_evidence_mapping = False
 
+        try:
+            from app.schemas.reasoning import CandidatePerspectiveAnalysis
+            is_perspective_analysis = (
+                isinstance(response_schema, type)
+                and issubclass(response_schema, CandidatePerspectiveAnalysis)
+            )
+        except Exception:
+            is_perspective_analysis = False
+
         if is_evidence_mapping:
             sanitized_data = cls.sanitize_evidence_mapping_dict(parsed_json)
+        elif is_perspective_analysis:
+            sanitized_data = cls.sanitize_perspective_analysis_dict(parsed_json)
         elif issubclass(response_schema, DecisionModel):
             sanitized_data = cls.sanitize_decision_model_dict(
                 parsed_json,
@@ -690,6 +868,7 @@ class StructuredOutputParser:
                 f"Validation failed for schema {response_schema.__name__}:\n"
                 + "\n".join(formatted_errors)
             )
+            error_types = [err.get("type", "") for err in e.errors()]
             primary_cat, all_cats, field_paths = cls.classify_validation_error(e)
             raise LLMResponseValidationError(
                 error_summary,
@@ -697,6 +876,7 @@ class StructuredOutputParser:
                     "schema": response_schema.__name__,
                     "category": primary_cat,
                     "categories": all_cats,
+                    "error_types": error_types,
                     "field_paths": field_paths,
                     "error_count": len(e.errors()),
                 },

@@ -723,8 +723,21 @@ class AnalysisService:
                 ) from e
 
             # 4. Check for LLM response schema validation failure in cause chain
-            if _find_cause_instance(e, LLMResponseValidationError):
-                logger.error("Analysis %s reasoning stage failed LLM response schema validation", analysis_id)
+            val_cause = _find_cause_instance(e, LLMResponseValidationError)
+            if val_cause:
+                val_details = getattr(val_cause, "details", {})
+                v_schema = val_details.get("schema", "unknown") if isinstance(val_details, dict) else "unknown"
+                v_cat = val_details.get("category", "unknown") if isinstance(val_details, dict) else "unknown"
+                v_paths = val_details.get("field_paths", []) if isinstance(val_details, dict) else []
+                v_types = val_details.get("error_types", []) if isinstance(val_details, dict) else []
+                logger.error(
+                    "Analysis %s reasoning stage failed LLM response schema validation: schema=%s, category=%s, error_types=%s, field_paths=%s",
+                    analysis_id,
+                    v_schema,
+                    v_cat,
+                    v_types,
+                    v_paths,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="Decision intelligence engine returned an unparseable response structure.",
