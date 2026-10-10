@@ -387,6 +387,7 @@ class GeminiLLMClient(LLMClient):
             final_validation_category: Optional[str] = None,
             final_validation_field_paths: Optional[List[str]] = None,
             final_validation_error_types: Optional[List[str]] = None,
+            final_validation_constraints: Optional[List[Dict[str, Any]]] = None,
         ) -> None:
             if not diagnostics_enabled:
                 return
@@ -407,6 +408,7 @@ class GeminiLLMClient(LLMClient):
                 "final_validation_category": final_validation_category,
                 "final_validation_field_paths": final_validation_field_paths,
                 "final_validation_error_types": final_validation_error_types,
+                "final_validation_constraints": final_validation_constraints,
                 "attempts": list(attempt_records),
             }
             self.last_diagnostic = diag_dict
@@ -823,21 +825,24 @@ class GeminiLLMClient(LLMClient):
                 )
                 field_paths_list = val_details.get("field_paths", []) if isinstance(val_details, dict) else []
                 error_types_list = val_details.get("error_types", []) if isinstance(val_details, dict) else []
+                constraints_list = val_details.get("constraints", []) if isinstance(val_details, dict) else []
                 if att_rec is not None and isinstance(val_details, dict):
                     att_rec["validation_category"] = val_cat
                     att_rec["validation_field_paths"] = field_paths_list
                     att_rec["validation_schema"] = val_details.get("schema", response_schema.__name__)
                     att_rec["validation_categories"] = val_details.get("categories", [val_cat])
                     att_rec["validation_error_types"] = error_types_list
+                    att_rec["validation_constraints"] = constraints_list
                 schema_str = val_details.get("schema", getattr(response_schema, "__name__", "unknown")) if isinstance(val_details, dict) else getattr(response_schema, "__name__", "unknown")
                 logger.warning(
-                    "Gemini structured response validation failed (attempt %d/%d): schema=%s, category=%s, error_types=%s, field_paths=%s",
+                    "Gemini structured response validation failed (attempt %d/%d): schema=%s, category=%s, error_types=%s, field_paths=%s, constraints=%s",
                     attempts,
                     max_attempts,
                     schema_str,
                     val_cat,
                     error_types_list,
                     field_paths_list,
+                    constraints_list,
                 )
 
                 if attempts < max_attempts and (deadline - time.monotonic()) > 0:
@@ -852,14 +857,16 @@ class GeminiLLMClient(LLMClient):
                     final_validation_category=val_cat,
                     final_validation_field_paths=field_paths_list,
                     final_validation_error_types=error_types_list,
+                    final_validation_constraints=constraints_list,
                 )
                 logger.error(
-                    "Gemini structured response validation exhausted all %d attempts: schema=%s, category=%s, error_types=%s, field_paths=%s",
+                    "Gemini structured response validation exhausted all %d attempts: schema=%s, category=%s, error_types=%s, field_paths=%s, constraints=%s",
                     max_attempts,
                     schema_str,
                     val_cat,
                     error_types_list,
                     field_paths_list,
+                    constraints_list,
                 )
                 raise
 

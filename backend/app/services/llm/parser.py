@@ -474,14 +474,10 @@ class StructuredOutputParser:
                 if r_clean in VALID_MAPPING_CONFIDENCE_LITERALS:
                     finding_copy["relationship_confidence"] = r_clean
 
-            # 4. Normalize target_entity_id placeholders
+            # 4. Normalize target_entity_id placeholders and deterministic canonical ID reconciliation
             t_id = finding_copy.get("target_entity_id")
-            if isinstance(t_id, str):
-                t_stripped = t_id.strip()
-                if t_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
-                    finding_copy["target_entity_id"] = None
-                else:
-                    finding_copy["target_entity_id"] = t_stripped
+            from app.services.evidence.mapper import reconcile_target_entity_id
+            finding_copy["target_entity_id"] = reconcile_target_entity_id(t_id)
 
             # 5. Normalize summary length boundary (max 500) and placeholders
             summary_val = finding_copy.get("summary")
@@ -870,6 +866,19 @@ class StructuredOutputParser:
             )
             error_types = [err.get("type", "") for err in e.errors()]
             primary_cat, all_cats, field_paths = cls.classify_validation_error(e)
+
+            constraints: List[Dict[str, Any]] = []
+            for err in e.errors():
+                err_type = err.get("type", "")
+                loc_str = ".".join(str(l) for l in err.get("loc", ()))
+                ctx = err.get("ctx")
+                c_info: Dict[str, Any] = {"field": loc_str, "type": err_type}
+                if isinstance(ctx, dict):
+                    for k in ("max_length", "min_length", "gt", "ge", "lt", "le", "multiple_of", "expected"):
+                        if k in ctx:
+                            c_info[k] = ctx[k]
+                constraints.append(c_info)
+
             raise LLMResponseValidationError(
                 error_summary,
                 details={
@@ -878,6 +887,7 @@ class StructuredOutputParser:
                     "categories": all_cats,
                     "error_types": error_types,
                     "field_paths": field_paths,
+                    "constraints": constraints,
                     "error_count": len(e.errors()),
                 },
                 category=primary_cat,
