@@ -493,7 +493,7 @@ def test_09_correct_partial_success_status_reporting(tmp_path):
 # 10. Global Deadline Propagation
 # ------------------------------------------------------------------------------
 
-def test_10_global_deadline_propagation():
+def test_10_global_deadline_propagation(monkeypatch):
     """Verify that Stage 4 evaluates remaining global analysis deadline and exhausts gracefully."""
     service = AnalysisService()
     req = AnalysisRequest(question="Global deadline test")
@@ -519,21 +519,30 @@ def test_10_global_deadline_propagation():
     assert "timed out" in str(rec_exc.value).lower()
 
     # 3. Test deadline expiring right before Stage 4 in AnalysisService.analyze
+    # Use a controlled monotonic clock to deterministically simulate deadline expiration
+    # specifically after Stage 3 completes and before Stage 4 starts.
+    clock_time = 1000.0
+    monkeypatch.setattr(time, "monotonic", lambda: clock_time)
+
+    deadline = clock_time + 100.0
     orig_build = service.reasoning_service.build_reasoning_board
 
-    def slow_boardroom(*args, **kwargs):
+    def board_and_expire(*args, **kwargs):
+        nonlocal clock_time
         res = orig_build(*args, **kwargs)
-        # Sleep until deadline is passed
-        time.sleep(0.05)
+        # Advance the controlled clock past the deadline immediately after Stage 3 completes
+        clock_time = deadline + 1.0
         return res
 
-    service.reasoning_service.build_reasoning_board = slow_boardroom
-    # Set tight deadline that will be valid through Stage 3 but expired before Stage 4
-    response = service.analyze(req, deadline_monotonic=time.monotonic() + 0.02)
+    service.reasoning_service.build_reasoning_board = board_and_expire
+
+    response = service.analyze(req, deadline_monotonic=deadline)
     assert response.status == "partial_success"
     assert response.recommendation is None
     assert response.recommendation_status == "unavailable"
+    assert response.recommendation_error is not None
     assert "deadline" in response.recommendation_error.lower()
+    assert response.reasoning_board is not None
 
 
 # ------------------------------------------------------------------------------

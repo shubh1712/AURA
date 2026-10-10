@@ -213,25 +213,11 @@ def test_d_deadline_expires_before_evidence_requirements() -> None:
         evidence_service=EvidenceService.create_default(fake_llm, FakeSearchProvider()),
     )
 
-    # Force deadline to expire right after deconstruct
-    original_deconstruct = engine.deconstruct
-
-    def deconstruct_and_expire(*args: Any, **kwargs: Any) -> DecisionModel:
-        dm = original_deconstruct(*args, **kwargs)
-        # Advance clock or trigger deadline expiration
-        return dm
-
-    engine.deconstruct = deconstruct_and_expire  # type: ignore
-
-    # Pass deadline that is valid during deconstruct but expired before requirements
-    current_time = time.monotonic()
-    service.analysis_timeout_seconds = 0.001  # expires almost immediately
+    # Pass deadline that is already expired
+    expired_deadline = time.monotonic() - 1.0
 
     with pytest.raises(HTTPException) as exc_info:
-        # Pass a deadline that expires after a tiny sleep
-        dl = time.monotonic() + 0.05
-        time.sleep(0.06)
-        service.analyze(_create_sample_request(), deadline_monotonic=dl)
+        service.analyze(_create_sample_request(), deadline_monotonic=expired_deadline)
 
     assert exc_info.value.status_code == 504
     assert len(fake_llm.call_history) == 0
