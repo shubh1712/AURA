@@ -689,7 +689,7 @@ class CandidateReasoningArgument(BaseModel):
     )
     requirement_ids: List[str] = Field(
         default_factory=list,
-        description="IDs of related EvidenceRequirements.",
+        description="IDs of related EvidenceRequirements (must start with 'req_').",
     )
     assumption_ids: List[str] = Field(
         default_factory=list,
@@ -697,7 +697,7 @@ class CandidateReasoningArgument(BaseModel):
     )
     unknown_ids: List[str] = Field(
         default_factory=list,
-        description="IDs of referenced Unknowns.",
+        description="IDs of referenced Unknowns from Decision Model (must start with 'unk_'). NEVER cite requirement IDs ('req_...') here.",
     )
     evidence_gap_ids: List[str] = Field(
         default_factory=list,

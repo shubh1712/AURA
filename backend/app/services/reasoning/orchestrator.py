@@ -22,7 +22,7 @@ from app.schemas.reasoning import (
     PerspectiveType,
     ReasoningPerspective,
 )
-from app.services.llm.client import LLMTimeoutError
+from app.services.llm.client import LLMConfig, LLMTimeoutError
 from app.services.reasoning.context_builder import (
     PerspectiveContext,
     ReasoningContext,

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 import re
 
 from app.schemas.evidence import (
+    DecisionEntityType,
     EvidenceKind,
     EvidenceStance,
     RequirementStatus,
@@ -263,8 +264,32 @@ def validate_and_reconcile_candidate_perspective(
                     },
                 )
 
+        resolved_uids: List[str] = []
         for uid in clean_uids:
-            if uid not in valid_unknown_ids:
+            if uid in valid_unknown_ids:
+                if uid not in resolved_uids:
+                    resolved_uids.append(uid)
+            elif uid in requirements_by_id:
+                req = requirements_by_id[uid]
+                # Canonical mapping is ONLY permitted when an exact, unambiguous mapping exists:
+                # the requirement must specifically target an UNKNOWN entity, and that target ID
+                # must exist in valid_unknown_ids. Arbitrary requirement IDs targeting other entity
+                # types (assumptions, tradeoffs, variables) remain strictly rejected.
+                if req.target_entity_type == DecisionEntityType.UNKNOWN and req.target_entity_id in valid_unknown_ids:
+                    canonical_uid = req.target_entity_id
+                    if canonical_uid not in resolved_uids:
+                        resolved_uids.append(canonical_uid)
+                else:
+                    raise ReasoningValidationError(
+                        f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
+                        details={
+                            "location": "validator.argument_references",
+                            "field": f"candidate.arguments[{idx}].unknown_ids",
+                            "rule": "nonexistent_unknown_id",
+                            "invalid_id": str(uid)[:50],
+                        },
+                    )
+            else:
                 raise ReasoningValidationError(
                     f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
                     details={
@@ -274,6 +299,7 @@ def validate_and_reconcile_candidate_perspective(
                         "invalid_id": str(uid)[:50],
                     },
                 )
+        clean_uids = resolved_uids
 
         for gid in clean_gids:
             if gid not in valid_gap_ids:

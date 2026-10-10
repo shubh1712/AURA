@@ -198,7 +198,7 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         f"Falsification: {truncate_narrative(a.falsification_condition, MAX_FIELD_NARRATIVE_CHARS)}"
         for a in dec.assumptions
     ]
-    sections.append("Assumptions:\n" + ("\n".join(asm_lines) if asm_lines else "  None"))
+    sections.append("=== ASSUMPTIONS ===\nNote: IDs start with 'asm_'.\n" + ("\n".join(asm_lines) if asm_lines else "  None"))
 
     # 9. Unknowns
     unk_lines = [
@@ -206,7 +206,7 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         f"Question: {truncate_narrative(u.question, MAX_FIELD_NARRATIVE_CHARS)} | Sources: {u.potential_sources}"
         for u in dec.unknowns
     ]
-    sections.append("Unknowns:\n" + ("\n".join(unk_lines) if unk_lines else "  None"))
+    sections.append("=== UNKNOWNS ===\nNote: IDs start with 'unk_'. These represent empirical information unknowns identified during decision framing.\n" + ("\n".join(unk_lines) if unk_lines else "  None"))
 
     # 10. Key Questions
     kq_lines = [f"  - {truncate_narrative(q, MAX_FIELD_NARRATIVE_CHARS)}" for q in dec.key_questions]
@@ -219,7 +219,7 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         f"Description: {truncate_narrative(r.description, MAX_FIELD_NARRATIVE_CHARS)}"
         for r in evi.requirements
     ]
-    sections.append("=== EVIDENCE REQUIREMENTS ===\n" + ("\n".join(req_lines) if req_lines else "  None"))
+    sections.append("=== EVIDENCE REQUIREMENTS ===\nNote: IDs start with 'req_'. These specify empirical evidence required to validate assumptions or resolve unknowns.\n" + ("\n".join(req_lines) if req_lines else "  None"))
 
     # 12 & 13. Deduplicated Source Excerpt Grouping & Evidence Serialization
     # Collect and deduplicate excerpts per source_id in deterministic order
@@ -355,12 +355,12 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         "2. Provide a comprehensive executive summary from this perspective's mandate.\n"
         "3. Formulate discrete arguments. Each argument must specify claim, direction, basis, reasoning, "
         "and reference only legitimate existing IDs from the context above.\n"
-        "4. ID Reference Conventions (Strict):\n"
-        "   - evidence_item_ids: Reference ONLY Evidence Item IDs from Section 13 (must start with 'evi_'). NEVER cite Source IDs ('src_...').\n"
-        "   - requirement_ids: If citing an evidence item, only cite requirement IDs ('req_...') listed under Requirements for that item in Section 13. If no specific requirement applies, use [].\n"
-        "   - assumption_ids: Reference ONLY Assumption IDs from Section 9 (must start with 'asm_').\n"
-        "   - unknown_ids: Reference ONLY Unknown IDs from Section 10 (must start with 'unk_').\n"
-        "   - evidence_gap_ids: Reference ONLY Gap IDs from Section 15 (must start with 'gap_').\n"
+        "4. ID Reference Conventions (Strict - Do NOT Mix ID Namespaces):\n"
+        "   - evidence_item_ids: Reference ONLY Evidence Item IDs from === EVIDENCE ITEMS === (must start with 'evi_'). NEVER cite Source IDs ('src_...').\n"
+        "   - requirement_ids: Reference ONLY Requirement IDs from === EVIDENCE REQUIREMENTS === (must start with 'req_'). Use this for requirements linked to cited evidence items OR when analyzing unfulfilled/pending requirements as unresolved dependencies. NEVER place 'req_...' in unknown_ids.\n"
+        "   - assumption_ids: Reference ONLY Assumption IDs from === ASSUMPTIONS === (must start with 'asm_').\n"
+        "   - unknown_ids: Reference ONLY Unknown IDs from === UNKNOWNS === (must start with 'unk_'). NEVER place Requirement IDs ('req_...') or Gap IDs ('gap_...') in unknown_ids.\n"
+        "   - evidence_gap_ids: Reference ONLY Gap IDs from === EVIDENCE GAPS & CONTRADICTIONS === (must start with 'gap_').\n"
         "   - related_entity_ids: Reference ONLY Decision Model entity IDs (e.g. 'obj_...', 'var_...', 'cnstr_...', 'stk_...').\n"
         "5. Empty Sets: For any list field where no items apply, provide an empty array [] (NEVER strings like 'none', 'N/A', or 'null').\n"
         "6. Explicitly cite any critical assumptions, evidence gaps, unresolved questions, and analytical limitations.\n"

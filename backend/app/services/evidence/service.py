@@ -15,7 +15,7 @@ Guarantees:
 from datetime import datetime, timezone
 import logging
 import time
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
