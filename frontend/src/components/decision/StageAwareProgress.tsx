@@ -41,6 +41,11 @@ const STAGES: StageStep[] = [
     description: "Evaluating across Growth, Finance, Customer, and Risk",
   },
   {
+    key: "stage4_recommendation",
+    label: "Recommending course of action",
+    description: "Formulating evidence-linked recommendation and action plan",
+  },
+  {
     key: "completed",
     label: "Complete",
     description: "Validated analysis report assembled",
@@ -52,7 +57,8 @@ const STAGE_ORDER: Record<string, number> = {
   stage1_decision_framer: 1,
   stage2_evidence_engine: 2,
   stage3_ai_boardroom: 3,
-  completed: 4,
+  stage4_recommendation: 4,
+  completed: 5,
 };
 
 export function StageAwareProgress({

@@ -41,6 +41,7 @@ class JobRecord:
     timeout_seconds: float
     framer_timeout_seconds: Optional[float]
     boardroom_timeout_seconds: Optional[float]
+    recommendation_timeout_seconds: Optional[float]
     progress_message: str
 
 
@@ -85,11 +86,17 @@ class SQLiteJobStorage:
                     timeout_seconds REAL NOT NULL,
                     framer_timeout_seconds REAL,
                     boardroom_timeout_seconds REAL,
+                    recommendation_timeout_seconds REAL,
                     progress_message TEXT NOT NULL
                 );
             """)
             try:
                 self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN boardroom_timeout_seconds REAL;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN recommendation_timeout_seconds REAL;")
                 self._conn.commit()
             except sqlite3.OperationalError:
                 pass
@@ -113,6 +120,7 @@ class SQLiteJobStorage:
         timeout_sec = request.timeout_seconds or default_timeout_seconds
         framer_sec = request.framer_operation_timeout_seconds
         boardroom_sec = request.boardroom_operation_timeout_seconds
+        recommendation_sec = request.recommendation_operation_timeout_seconds
         initial_msg = "Job submitted and queued for execution."
 
         req_json = request.model_dump_json()
@@ -124,8 +132,9 @@ class SQLiteJobStorage:
                     job_id, status, stage, request_json, response_json,
                     error_message, error_status_code, owner_id,
                     created_at, started_at, completed_at,
-                    timeout_seconds, framer_timeout_seconds, boardroom_timeout_seconds, progress_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    timeout_seconds, framer_timeout_seconds, boardroom_timeout_seconds,
+                    recommendation_timeout_seconds, progress_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     jid,
@@ -142,6 +151,7 @@ class SQLiteJobStorage:
                     timeout_sec,
                     framer_sec,
                     boardroom_sec,
+                    recommendation_sec,
                     initial_msg,
                 ),
             )
@@ -162,6 +172,7 @@ class SQLiteJobStorage:
             timeout_seconds=timeout_sec,
             framer_timeout_seconds=framer_sec,
             boardroom_timeout_seconds=boardroom_sec,
+            recommendation_timeout_seconds=recommendation_sec,
             progress_message=initial_msg,
         )
 
@@ -405,5 +416,6 @@ class SQLiteJobStorage:
             timeout_seconds=row["timeout_seconds"],
             framer_timeout_seconds=row["framer_timeout_seconds"],
             boardroom_timeout_seconds=row["boardroom_timeout_seconds"] if "boardroom_timeout_seconds" in row.keys() else None,
+            recommendation_timeout_seconds=row["recommendation_timeout_seconds"] if "recommendation_timeout_seconds" in row.keys() else None,
             progress_message=row["progress_message"],
         )

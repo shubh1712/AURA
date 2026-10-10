@@ -24,3 +24,40 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Executive Recommendation Report Print & Export Styles (Task 10)           */
+/* -------------------------------------------------------------------------- */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: auto;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  /* Force display of expanded action details when printing */
+  article > div.hidden {
+    display: block !important;
+  }
+
+  /* Prevent page breaks inside cards and sections */
+  section,
+  article,
+  .rounded-xl,
+  .rounded-2xl {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Hide navigation, inputs, and interactive buttons */
+  header,
+  footer,
+  nav,
+  button {
+    display: none !important;
+  }
+}

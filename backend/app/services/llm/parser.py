@@ -422,18 +422,26 @@ class StructuredOutputParser:
         Allowlisted transformations:
         - Case-normalization and whitespace trimming for known EvidenceStance literals ('supports', 'challenges', 'context', 'inconclusive').
         - Case-normalization and whitespace trimming for known ConfidenceLevel literals ('low', 'medium', 'high', 'untested').
+        - Coerces None for array container fields ('findings', 'numeric_data') to empty lists [].
+        - Coerces uninformative placeholder values ('', 'none', 'null', 'n/a', 'undefined') on optional numeric and reference fields to None.
+        - Coerces sample_size=0 (reporting no sample size) to None to satisfy ge=1.
+        - Safely truncates strings exceeding schema max_length boundaries (summary <= 500).
 
         Strictly preserves:
         - Non-mutating: creates a new dictionary structure; input data is not modified.
         - Zero key stripping: extra/unknown keys are preserved so extra="forbid" strictly fails validation.
-        - Zero numeric coercion: string formatted numbers ('14%') are not coerced.
-        - Zero content modification: text, summaries, reasoning, and numeric fields are untouched.
+        - Zero numeric value fabrication/coercion: string formatted numbers ('14%') are not coerced.
+        - Zero content modification: factual content excerpts, reasoning narratives, and valid numeric values are untouched.
         """
         if not isinstance(data, dict):
             return data
 
         cleaned = dict(data)
         findings_raw = cleaned.get("findings")
+        if findings_raw is None:
+            cleaned["findings"] = []
+            return cleaned
+
         if not isinstance(findings_raw, list):
             return cleaned
 
@@ -465,6 +473,96 @@ class StructuredOutputParser:
                 r_clean = rel_conf.strip().lower()
                 if r_clean in VALID_MAPPING_CONFIDENCE_LITERALS:
                     finding_copy["relationship_confidence"] = r_clean
+
+            # 4. Normalize target_entity_id placeholders
+            t_id = finding_copy.get("target_entity_id")
+            if isinstance(t_id, str):
+                t_stripped = t_id.strip()
+                if t_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
+                    finding_copy["target_entity_id"] = None
+                else:
+                    finding_copy["target_entity_id"] = t_stripped
+
+            # 5. Normalize summary length boundary (max 500) and placeholders
+            summary_val = finding_copy.get("summary")
+            if isinstance(summary_val, str):
+                sum_stripped = summary_val.strip()
+                if sum_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
+                    finding_copy["summary"] = None
+                elif len(sum_stripped) > 500:
+                    finding_copy["summary"] = sum_stripped[:497] + "..."
+                else:
+                    finding_copy["summary"] = sum_stripped
+
+            # 6. Normalize numeric_data array and individual numeric items
+            num_raw = finding_copy.get("numeric_data")
+            if num_raw is None:
+                finding_copy["numeric_data"] = []
+            elif isinstance(num_raw, list):
+                clean_nums: List[Any] = []
+                for n_item in num_raw:
+                    if not isinstance(n_item, dict):
+                        clean_nums.append(n_item)
+                        continue
+                    n_copy = dict(n_item)
+
+                    # sample_size: 0 or placeholder -> None
+                    s_sz = n_copy.get("sample_size")
+                    if s_sz == 0:
+                        n_copy["sample_size"] = None
+                    elif isinstance(s_sz, str) and s_sz.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["sample_size"] = None
+
+                    # value placeholders -> None
+                    v_val = n_copy.get("value")
+                    if isinstance(v_val, str) and v_val.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["value"] = None
+
+                    # range_min / range_max placeholders -> None
+                    rmin = n_copy.get("range_min")
+                    if isinstance(rmin, str) and rmin.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["range_min"] = None
+                    rmax = n_copy.get("range_max")
+                    if isinstance(rmax, str) and rmax.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["range_max"] = None
+
+                    # unit / confidence_interval / context string lengths and placeholders
+                    unit_val = n_copy.get("unit")
+                    if isinstance(unit_val, str):
+                        u_strip = unit_val.strip()
+                        if u_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["unit"] = None
+                        elif len(u_strip) > 30:
+                            n_copy["unit"] = u_strip[:30]
+                        else:
+                            n_copy["unit"] = u_strip
+
+                    ci_val = n_copy.get("confidence_interval")
+                    if isinstance(ci_val, str):
+                        ci_strip = ci_val.strip()
+                        if ci_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["confidence_interval"] = None
+                        elif len(ci_strip) > 100:
+                            n_copy["confidence_interval"] = ci_strip[:100]
+                        else:
+                            n_copy["confidence_interval"] = ci_strip
+
+                    ctx_val = n_copy.get("context")
+                    if isinstance(ctx_val, str):
+                        ctx_strip = ctx_val.strip()
+                        if ctx_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["context"] = None
+                        elif len(ctx_strip) > 300:
+                            n_copy["context"] = ctx_strip[:300]
+                        else:
+                            n_copy["context"] = ctx_strip
+
+                    m_name = n_copy.get("metric_name")
+                    if isinstance(m_name, str) and len(m_name) > 100:
+                        n_copy["metric_name"] = m_name[:100]
+
+                    clean_nums.append(n_copy)
+                finding_copy["numeric_data"] = clean_nums
 
             cleaned_findings.append(finding_copy)
 

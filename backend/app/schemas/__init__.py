@@ -51,6 +51,27 @@ from app.schemas.reasoning import (
     ReasoningPerspective,
     validate_reasoning_references,
 )
+from app.schemas.recommendation import (
+    ActionItem,
+    ActionPlan,
+    ActionPriority,
+    ActionTimeHorizon,
+    AlternativeOption,
+    CandidateActionItem,
+    CandidateActionPlan,
+    CandidateAlternativeOption,
+    CandidateDecisionGate,
+    CandidateDecisionRecommendation,
+    CandidateUncertaintyAssessment,
+    DecisionGate,
+    DecisionReadiness,
+    DecisionRecommendation,
+    DecisionStatus,
+    EvidenceStrength,
+    RecommendationStability,
+    UncertaintyAssessment,
+    generate_deterministic_recommendation_id,
+)
 
 __all__ = [
     # Day 1 & Day 2 Foundation & Decision Model
@@ -104,4 +125,24 @@ __all__ = [
     "CandidatePerspectiveAnalysis",
     "CandidateDisagreement",
     "CandidateBoardSynthesis",
+    # Day 5 Decision Recommendation & Action Planning
+    "DecisionStatus",
+    "EvidenceStrength",
+    "DecisionReadiness",
+    "RecommendationStability",
+    "ActionPriority",
+    "ActionTimeHorizon",
+    "AlternativeOption",
+    "DecisionGate",
+    "ActionItem",
+    "ActionPlan",
+    "UncertaintyAssessment",
+    "DecisionRecommendation",
+    "CandidateAlternativeOption",
+    "CandidateDecisionGate",
+    "CandidateActionItem",
+    "CandidateActionPlan",
+    "CandidateUncertaintyAssessment",
+    "CandidateDecisionRecommendation",
+    "generate_deterministic_recommendation_id",
 ]

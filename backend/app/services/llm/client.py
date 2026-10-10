@@ -109,6 +109,10 @@ class LLMConfig(BaseModel):
         ge=0,
         description="Number of retry attempts on transient network or rate-limit failures.",
     )
+    stage: Optional[str] = Field(
+        default=None,
+        description="Optional pipeline stage name for telemetry and diagnostics.",
+    )
 
 
 DEFAULT_LLM_CONFIG = LLMConfig()
@@ -370,6 +374,15 @@ class FakeLLMClient(LLMClient):
                     evidence_sensitive_points=[],
                     unresolved_questions=[],
                 )  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateDecisionRecommendation, construct realistic candidate recommendation
+        try:
+            from app.schemas.recommendation import CandidateDecisionRecommendation
+            if issubclass(response_schema, CandidateDecisionRecommendation):
+                from app.services.llm.mock_data import get_default_candidate_recommendation
+                return get_default_candidate_recommendation()  # type: ignore
         except ImportError:
             pass
 

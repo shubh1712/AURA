@@ -136,3 +136,66 @@ def get_default_decision_model(question: str = "Should our startup reduce pricin
             "Will existing cohort customers request retroactive price adjustments?",
         ],
     )
+
+
+def get_default_candidate_recommendation():
+    """Generates a valid canonical CandidateDecisionRecommendation for mock/fake LLM runs."""
+    from app.schemas.recommendation import (
+        ActionPriority,
+        ActionTimeHorizon,
+        CandidateActionItem,
+        CandidateActionPlan,
+        CandidateAlternativeOption,
+        CandidateDecisionRecommendation,
+        CandidateUncertaintyAssessment,
+        DecisionReadiness,
+        DecisionStatus,
+        EvidenceStrength,
+        RecommendationStability,
+    )
+
+    return CandidateDecisionRecommendation(
+        decision_status=DecisionStatus.PROCEED,
+        recommended_action="Proceed with phased execution and structured milestone validation.",
+        executive_rationale="Analysis indicates favorable conditions for proceeding with phased implementation under monitored risk controls.",
+        supporting_evidence_item_ids=[],
+        relevant_assumption_ids=[],
+        relevant_evidence_gap_ids=[],
+        unresolved_disagreement_ids=[],
+        alternative_options=[
+            CandidateAlternativeOption(
+                name="Status Quo Baseline",
+                description="Maintain current operating baseline without changes.",
+                tradeoffs=["Preserves resources", "Forgoes strategic opportunities"],
+                why_not_recommended="Does not address primary strategic objectives.",
+            )
+        ],
+        uncertainty_assessment=CandidateUncertaintyAssessment(
+            evidence_strength=EvidenceStrength.MODERATE,
+            decision_readiness=DecisionReadiness.READY,
+            recommendation_stability=RecommendationStability.HIGH,
+            critical_missing_information=[],
+            conditions_changing_recommendation=[],
+            assumptions_relied_upon=[],
+            evidence_gaps_relied_upon=[],
+        ),
+        action_plan=CandidateActionPlan(
+            summary="Phased rollout prioritizing pilot validation followed by scaled execution.",
+            actions=[
+                CandidateActionItem(
+                    title="Pilot Execution",
+                    objective="Validate initial operational assumptions",
+                    description="Execute targeted pilot across primary stakeholder segments.",
+                    priority=ActionPriority.HIGH,
+                    responsible_role="Project Lead",
+                    time_horizon=ActionTimeHorizon.IMMEDIATE,
+                    dependencies=[],
+                    success_metrics=["Pilot milestones completed"],
+                    risk_mitigations=["Regular review checkpoints"],
+                    decision_gates=[],
+                    fallback_action="Re-evaluate scope and assumptions",
+                )
+            ],
+            key_milestones=["Pilot review", "Scaled rollout"],
+        ),
+    )

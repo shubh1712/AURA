@@ -490,10 +490,9 @@ def test_analysis_response_schema_validation_and_no_recommendations(client: Test
     assert "evidence_package" in data
     assert data["evidence_package"] is not None
 
-    # 25. No recommendation field exists
-    assert "recommendation" not in AnalysisResponse.model_fields
-    assert not hasattr(parsed, "recommendation")
-    assert "recommendation" not in data
+    # 25. Recommendation field is present in AnalysisResponse and populated or optional
+    assert "recommendation" in AnalysisResponse.model_fields
+    assert hasattr(parsed, "recommendation")
     assert "recommendation" not in data["evidence_package"]
 
     # 26. reliability_score remains None (Source.reliability_score is strictly None)

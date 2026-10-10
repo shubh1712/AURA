@@ -55,9 +55,15 @@ from app.services.llm.client import LLMClient, LLMTimeoutError
 class EvidenceServiceError(Exception):
     """Raised when an unrecoverable failure occurs during evidence pipeline orchestration."""
 
-    def __init__(self, message: str, stage: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        stage: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.stage = stage
+        self.details = details or {}
 
 
 # ------------------------------------------------------------------------------
@@ -295,14 +301,22 @@ class EvidenceService:
             )
         except Exception as err:
             t_fail = time.monotonic() - t0_sub
+            err_details = getattr(err, "details", {}) if hasattr(err, "details") else {}
+            err_cat = getattr(err, "category", None) or (err_details.get("category") if isinstance(err_details, dict) else None) or type(err).__name__
+            err_schema = err_details.get("schema") if isinstance(err_details, dict) else None
+            err_fields = err_details.get("field_paths") if isinstance(err_details, dict) else None
             logger.warning(
-                "Evidence substage 'mapping' failed after %.2fs with %s",
+                "Evidence substage 'mapping' failed after %.2fs with %s (category=%s, schema=%s, field_paths=%s)",
                 t_fail,
                 type(err).__name__,
+                err_cat,
+                err_schema,
+                err_fields,
             )
             raise EvidenceServiceError(
                 f"Evidence orchestration failed at stage 'mapping': {err}",
                 stage="mapping",
+                details=err_details if isinstance(err_details, dict) else {},
             ) from err
 
         # Stage 5: Gap Detection & Status Resolution

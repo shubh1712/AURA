@@ -10,6 +10,7 @@ this service module.
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -42,6 +43,20 @@ from app.services.llm.client import (
 from app.services.llm.parser import parse_and_validate_structured_output
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _sanitize_diagnostic_text(text: Optional[str]) -> str:
+    """Sanitizes text for diagnostic logs and errors, redacting credentials and truncating length."""
+    if not text:
+        return ""
+    s = str(text).strip()
+    s = re.sub(r'AIza[0-9A-Za-z_\-]{20,}', '[REDACTED_API_KEY]', s)
+    s = re.sub(r'ya29\.[0-9A-Za-z_\-]+', '[REDACTED_TOKEN]', s)
+    s = re.sub(r'(?i)\b(?:bearer|key|token|api_key|secret|password)\s*[:=]\s*[^\s,;]+', '[REDACTED_CREDENTIAL]', s)
+    s = re.sub(r'(?i)\bbearer\s+[^\s,;]+', '[REDACTED_TOKEN]', s)
+    if len(s) > 500:
+        s = s[:497] + "..."
+    return s
 
 
 class GeminiLLMClient(LLMClient):
@@ -208,16 +223,17 @@ class GeminiLLMClient(LLMClient):
 
         When response_schema is DecisionModel, applies narrow safe description compaction
         to reduce wire payload without altering field semantics, types, or validation contracts.
+        Preserves schema properties named 'title' inside 'properties' dictionaries.
         """
-        def _strip_titles(s: Any) -> Any:
+        def _strip_titles(s: Any, parent_key: Optional[str] = None) -> Any:
             if isinstance(s, dict):
                 return {
-                    k: _strip_titles(v)
+                    k: _strip_titles(v, parent_key=k)
                     for k, v in s.items()
-                    if k != "title"
+                    if not (k == "title" and parent_key != "properties" and isinstance(v, str))
                 }
             if isinstance(s, list):
-                return [_strip_titles(item) for item in s]
+                return [_strip_titles(item, parent_key=parent_key) for item in s]
             return s
 
         cleaned = _strip_titles(schema)
@@ -274,9 +290,30 @@ class GeminiLLMClient(LLMClient):
         schema_dict = self._clean_schema_for_transport(raw_schema, response_schema=response_schema)
         t_schema = (time.monotonic() - t0_schema) if diagnostics_enabled else 0.0
 
-        schema_chars = len(json.dumps(schema_dict)) if diagnostics_enabled else 0
+        stage = getattr(cfg, "stage", None) if cfg else None
+        if not stage and response_schema is not None:
+            schema_name = getattr(response_schema, "__name__", "")
+            if "Recommendation" in schema_name:
+                stage = "recommendation"
+            elif "Synthesis" in schema_name:
+                stage = "synthesis"
+            elif "Perspective" in schema_name:
+                stage = "perspective_evaluation"
+            elif "Requirements" in schema_name:
+                stage = "evidence_requirements"
+            elif "Evidence" in schema_name:
+                stage = "evidence_mapping"
+            elif "DecisionModel" in schema_name:
+                stage = "framing"
+            else:
+                stage = schema_name or "unknown"
+        elif not stage:
+            stage = "unknown"
+
+        schema_chars = len(json.dumps(schema_dict))
         sys_prompt_chars = len(system_instruction) if system_instruction else 0
         user_prompt_chars = len(prompt)
+        total_payload_chars = user_prompt_chars + sys_prompt_chars + schema_chars
 
         response_format = {
             "type": "text",
@@ -528,6 +565,64 @@ class GeminiLLMClient(LLMClient):
 
                 # Non-retryable: Deterministic client error
                 if is_client_error:
+                    gemini_status = None
+                    gemini_message = None
+
+                    err_body = getattr(e, "body", None)
+                    if isinstance(err_body, dict):
+                        err_obj = err_body.get("error", {})
+                        if isinstance(err_obj, dict):
+                            gemini_status = err_obj.get("status")
+                            gemini_message = err_obj.get("message")
+                        elif isinstance(err_obj, str):
+                            gemini_message = err_obj
+                    elif isinstance(err_body, str):
+                        try:
+                            parsed_body = json.loads(err_body)
+                            if isinstance(parsed_body, dict):
+                                err_obj = parsed_body.get("error", {})
+                                if isinstance(err_obj, dict):
+                                    gemini_status = err_obj.get("status")
+                                    gemini_message = err_obj.get("message")
+                        except Exception:
+                            gemini_message = err_body
+
+                    resp = getattr(e, "response", None)
+                    if resp is not None and not gemini_message:
+                        try:
+                            resp_json = resp.json()
+                            if isinstance(resp_json, dict):
+                                err_obj = resp_json.get("error", {})
+                                if isinstance(err_obj, dict):
+                                    gemini_status = gemini_status or err_obj.get("status")
+                                    gemini_message = err_obj.get("message")
+                        except Exception:
+                            pass
+
+                    if not gemini_status:
+                        gemini_status = getattr(e, "status", None)
+                    if not gemini_message:
+                        gemini_message = getattr(e, "message", None) or str(e)
+
+                    sanitized_status = _sanitize_diagnostic_text(gemini_status) or "INVALID_ARGUMENT"
+                    sanitized_message = _sanitize_diagnostic_text(gemini_message)
+
+                    err_details: Dict[str, Any] = {
+                        "status_code": status_code or 400,
+                        "gemini_status": sanitized_status,
+                        "gemini_message": sanitized_message,
+                        "model": model_name,
+                        "stage": stage,
+                        "is_structured": True,
+                        "schema_name": getattr(response_schema, "__name__", "unknown"),
+                        "payload_size_chars": total_payload_chars,
+                        "generation_config": {
+                            "temperature": cfg.temperature,
+                            "top_p": cfg.top_p,
+                            "max_output_tokens": cfg.max_output_tokens,
+                        },
+                    }
+
                     _record_attempt(
                         status="client_error",
                         error_category="client_error",
@@ -539,9 +634,22 @@ class GeminiLLMClient(LLMClient):
                         status="client_error",
                         final_call_duration=t_call,
                     )
+
+                    if diagnostics_enabled:
+                        logger.warning(
+                            "Gemini client error (HTTP %s): status=%s, model=%s, stage=%s, structured=True, payload_chars=%d, message=%s",
+                            status_code or 400,
+                            sanitized_status,
+                            model_name,
+                            stage,
+                            total_payload_chars,
+                            sanitized_message,
+                        )
+
+                    error_suffix = f": {sanitized_message}" if sanitized_message else "."
                     raise LLMError(
-                        f"Gemini API client error ({status_code}).",
-                        details={"status_code": status_code, "model": model_name},
+                        f"Gemini API client error ({status_code or 400}){error_suffix}",
+                        details=err_details,
                     ) from e
 
                 # Retryable: Rate limit
@@ -714,6 +822,17 @@ class GeminiLLMClient(LLMClient):
                     att_rec["validation_field_paths"] = val_details.get("field_paths", [])
                     att_rec["validation_schema"] = val_details.get("schema", response_schema.__name__)
                     att_rec["validation_categories"] = val_details.get("categories", [val_cat])
+                schema_str = val_details.get("schema", getattr(response_schema, "__name__", "unknown")) if isinstance(val_details, dict) else getattr(response_schema, "__name__", "unknown")
+                field_paths_list = val_details.get("field_paths", []) if isinstance(val_details, dict) else []
+                logger.warning(
+                    "Gemini structured response validation failed (attempt %d/%d): schema=%s, category=%s, field_paths=%s",
+                    attempts,
+                    max_attempts,
+                    schema_str,
+                    val_cat,
+                    field_paths_list,
+                )
+
                 if attempts < max_attempts and (deadline - time.monotonic()) > 0:
                     sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
                     if att_rec is not None:
@@ -724,6 +843,13 @@ class GeminiLLMClient(LLMClient):
                     final_call_duration=t_call,
                     final_parse_duration=(t1_parse - t0_parse) if diagnostics_enabled else 0.0,
                     final_validation_category=val_cat,
+                )
+                logger.error(
+                    "Gemini structured response validation exhausted all %d attempts: schema=%s, category=%s, field_paths=%s",
+                    max_attempts,
+                    schema_str,
+                    val_cat,
+                    field_paths_list,
                 )
                 raise
 

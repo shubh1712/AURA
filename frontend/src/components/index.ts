@@ -16,3 +16,4 @@ export * from "./decision/boardroom/ReasoningBoardSection";
 export * from "./decision/boardroom/PerspectiveCard";
 export * from "./decision/boardroom/DisagreementsSection";
 export * from "./decision/boardroom/BoardSynthesisSection";
+export * from "./decision/recommendation";

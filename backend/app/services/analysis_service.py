@@ -21,6 +21,7 @@ from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
 from app.schemas.reasoning import ReasoningBoard
+from app.schemas.recommendation import DecisionRecommendation, DecisionStatus
 from app.services.evidence import (
     EvidenceService,
     EvidenceServiceError,
@@ -51,6 +52,13 @@ from app.services.reasoning import (
     ReasoningService,
     ReasoningServiceError,
     ReasoningValidationError,
+)
+from app.services.recommendation import (
+    RecommendationError,
+    RecommendationEvaluationError,
+    RecommendationService,
+    RecommendationServiceError,
+    RecommendationValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,11 +91,25 @@ def _is_timeout_error(exc: BaseException) -> bool:
     while current is not None and id(current) not in visited:
         if isinstance(current, (LLMTimeoutError, SearchTimeoutError, AnalysisTimeoutError)):
             return True
-        if isinstance(current, (ReasoningEvaluationError, ReasoningOrchestrationError, ReasoningServiceError)):
+        if isinstance(
+            current,
+            (
+                ReasoningEvaluationError,
+                ReasoningOrchestrationError,
+                ReasoningServiceError,
+                RecommendationEvaluationError,
+                RecommendationServiceError,
+            ),
+        ):
+            details = getattr(current, "details", {})
+            if isinstance(details, dict) and details.get("error_type") == "timeout":
+                return True
             msg = str(current).lower()
-            if "timed out" in msg or "timeout" in msg or "deadline" in msg:
+            clean_msg = msg.replace("timed out or failed", "")
+            if ("timed out" in clean_msg or "timeout" in clean_msg or "deadline" in clean_msg) and "invalid request" not in clean_msg and "validation failed" not in clean_msg:
                 return True
         visited.add(id(current))
+        current = current.__cause__ or current.__context__
     return False
 
 
@@ -159,23 +181,27 @@ class AnalysisService:
         engine: Optional[QuestionUnderstandingEngine] = None,
         evidence_service: Optional[EvidenceService] = None,
         reasoning_service: Optional[ReasoningService] = None,
+        recommendation_service: Optional[RecommendationService] = None,
         llm_client: Optional[LLMClient] = None,
         search_provider: Optional[SearchProvider] = None,
         analysis_timeout_seconds: Optional[float] = None,
         framer_operation_timeout_seconds: Optional[float] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
+        recommendation_operation_timeout_seconds: Optional[float] = None,
     ) -> None:
-        """Initializes AnalysisService with engine, evidence_service, and reasoning_service.
+        """Initializes AnalysisService with engine, evidence_service, reasoning_service, and recommendation_service.
 
         Args:
             engine: Optional pre-configured QuestionUnderstandingEngine.
             evidence_service: Optional pre-configured EvidenceService.
             reasoning_service: Optional pre-configured ReasoningService.
+            recommendation_service: Optional pre-configured RecommendationService.
             llm_client: Optional pre-configured LLMClient.
             search_provider: Optional pre-configured SearchProvider.
             analysis_timeout_seconds: Optional overall wall-clock analysis deadline budget in seconds.
             framer_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 1 Decision Framer.
             boardroom_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 3 AI Boardroom perspectives.
+            recommendation_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 4 Recommendation Engine.
         """
         self.analysis_timeout_seconds: float = (
             analysis_timeout_seconds
@@ -219,6 +245,24 @@ class AnalysisService:
         else:
             self.boardroom_operation_timeout_seconds = None
 
+        raw_recommendation_to = recommendation_operation_timeout_seconds
+        if raw_recommendation_to is None:
+            raw_recommendation_to = getattr(settings, "AURA_RECOMMENDATION_OPERATION_TIMEOUT_SECONDS", None)
+            if raw_recommendation_to is None:
+                env_val = os.environ.get("AURA_RECOMMENDATION_OPERATION_TIMEOUT_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_recommendation_to = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_RECOMMENDATION_OPERATION_TIMEOUT_SECONDS value: {env_val}") from ve
+
+        if raw_recommendation_to is not None:
+            if raw_recommendation_to <= 0.0:
+                raise ValueError("recommendation_operation_timeout_seconds must be strictly greater than 0.0")
+            self.recommendation_operation_timeout_seconds: Optional[float] = float(raw_recommendation_to)
+        else:
+            self.recommendation_operation_timeout_seconds = None
+
         if engine is not None and not isinstance(engine, DependsParam):
             self.engine = engine
         elif llm_client is not None:
@@ -242,6 +286,15 @@ class AnalysisService:
             self.reasoning_service = self._build_default_reasoning_service(
                 llm_client=effective_llm,
                 boardroom_operation_timeout_seconds=self.boardroom_operation_timeout_seconds,
+            )
+
+        if recommendation_service is not None and not isinstance(recommendation_service, DependsParam):
+            self.recommendation_service = recommendation_service
+        else:
+            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
+            self.recommendation_service = self._build_default_recommendation_service(
+                llm_client=effective_llm,
+                recommendation_operation_timeout_seconds=self.recommendation_operation_timeout_seconds,
             )
 
     @classmethod
@@ -275,6 +328,19 @@ class AnalysisService:
         return ReasoningService.create_default(
             llm_client=client,
             boardroom_operation_timeout_seconds=boardroom_operation_timeout_seconds,
+        )
+
+    @classmethod
+    def _build_default_recommendation_service(
+        cls,
+        llm_client: Optional[LLMClient] = None,
+        recommendation_operation_timeout_seconds: Optional[float] = None,
+    ) -> RecommendationService:
+        """Builds default RecommendationService wired with provided or default LLMClient."""
+        client = llm_client or cls.get_default_client()
+        return RecommendationService.create_default(
+            llm_client=client,
+            recommendation_operation_timeout_seconds=recommendation_operation_timeout_seconds,
         )
 
     def analyze(
@@ -405,15 +471,84 @@ class AnalysisService:
                 else:
                     raise
 
-            # 4. Assemble validated response
+            # 4. Generate grounded recommendation & action plan (Recommendation Engine)
+            if stage_callback:
+                stage_callback("stage4_recommendation")
+
+            recommendation: Optional[DecisionRecommendation] = None
+            recommendation_status: Optional[str] = None
+            recommendation_error: Optional[str] = None
+
+            if time.monotonic() >= effective_deadline:
+                logger.warning(
+                    "Analysis %s exceeded end-to-end deadline before Stage 4 recommendation generation.",
+                    analysis_id,
+                )
+                recommendation_status = "unavailable"
+                recommendation_error = "Stage 4 recommendation generation skipped: global analysis deadline expired."
+            else:
+                recommendation_config = None
+                if self.recommendation_operation_timeout_seconds is not None:
+                    recommendation_config = LLMConfig(
+                        operation_timeout_seconds=self.recommendation_operation_timeout_seconds,
+                        timeout_seconds=min(45.0, self.recommendation_operation_timeout_seconds),
+                    )
+
+                rec_kwargs: Dict[str, Any] = {
+                    "decision_model": decision_model,
+                    "evidence_package": evidence_package,
+                    "reasoning_board": reasoning_board,
+                    "deadline_monotonic": effective_deadline,
+                }
+                if recommendation_config is not None:
+                    rec_kwargs["recommendation_config"] = recommendation_config
+
+                try:
+                    try:
+                        recommendation = self.recommendation_service.generate_recommendation(**rec_kwargs)
+                    except TypeError as te:
+                        if "unexpected keyword argument 'recommendation_config'" in str(te):
+                            rec_kwargs.pop("recommendation_config", None)
+                            recommendation = self.recommendation_service.generate_recommendation(**rec_kwargs)
+                        else:
+                            raise
+                    recommendation_status = "completed"
+                except Exception as exc:
+                    # Explicit Product Failure Policy:
+                    # If Stages 1-3 succeed but Stage 4 fails, preserve completed Boardroom result
+                    # and expose recommendation as unavailable.
+                    logger.warning(
+                        "Analysis %s Stage 4 recommendation generation failed; preserving Boardroom output. Error: %s: %s",
+                        analysis_id,
+                        type(exc).__name__,
+                        str(exc),
+                    )
+                    recommendation_status = "unavailable"
+                    if _is_timeout_error(exc):
+                        recommendation_error = f"Recommendation generation timed out: {getattr(exc, 'message', str(exc))}"
+                    else:
+                        recommendation_error = f"Recommendation generation unavailable: {getattr(exc, 'message', str(exc))}"
+
+            # 5. Assemble validated response
+            is_full_success = recommendation is not None
+            overall_status = "completed" if is_full_success else "partial_success"
+            message_text = (
+                "Decision deconstruction, evidence gathering, boardroom deliberation, and recommendation completed successfully."
+                if is_full_success
+                else f"Decision analysis completed with Boardroom deliberation; recommendation stage unavailable ({recommendation_error})."
+            )
+
             return AnalysisResponse(
                 analysis_id=analysis_id,
-                status="completed",
+                status=overall_status,
                 decision_model=decision_model,
                 evidence_package=evidence_package,
                 reasoning_board=reasoning_board,
+                recommendation=recommendation,
+                recommendation_status=recommendation_status,
+                recommendation_error=recommendation_error,
                 question=request.question,
-                message="Decision deconstruction, evidence gathering, and boardroom deliberation completed successfully.",
+                message=message_text,
             )
 
         except (LLMTimeoutError, SearchTimeoutError, AnalysisTimeoutError) as e:
@@ -526,7 +661,21 @@ class AnalysisService:
                     detail="Decision intelligence request rate limit or quota exceeded. Please try again shortly.",
                 ) from e
 
-            logger.error("Analysis %s evidence orchestration pipeline failure", analysis_id)
+            val_cause = _find_cause_instance(e, LLMResponseValidationError)
+            if val_cause is not None:
+                v_details = getattr(val_cause, "details", {})
+                v_cat = getattr(val_cause, "category", None) or (v_details.get("category") if isinstance(v_details, dict) else "validation_error")
+                v_schema = v_details.get("schema", "unknown") if isinstance(v_details, dict) else "unknown"
+                v_paths = v_details.get("field_paths", []) if isinstance(v_details, dict) else []
+                logger.error(
+                    "Analysis %s evidence stage validation failed: schema=%s, category=%s, field_paths=%s",
+                    analysis_id,
+                    v_schema,
+                    v_cat,
+                    v_paths,
+                )
+            else:
+                logger.error("Analysis %s evidence orchestration pipeline failure", analysis_id)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Evidence orchestration pipeline failure encountered during analysis.",
@@ -685,21 +834,34 @@ def get_reasoning_service(
     )
 
 
+def get_recommendation_service(
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> RecommendationService:
+    """FastAPI dependency provider for RecommendationService."""
+    client = None if isinstance(llm_client, DependsParam) else llm_client
+    return RecommendationService.create_default(
+        llm_client=client or get_llm_client(),
+    )
+
+
 def get_analysis_service(
     engine: QuestionUnderstandingEngine = Depends(get_question_understanding_engine),
     evidence_service: EvidenceService = Depends(get_evidence_service),
     reasoning_service: ReasoningService = Depends(get_reasoning_service),
+    recommendation_service: RecommendationService = Depends(get_recommendation_service),
 ) -> AnalysisService:
     """FastAPI dependency provider for AnalysisService."""
     if (
         not isinstance(engine, DependsParam)
         and not isinstance(evidence_service, DependsParam)
         and not isinstance(reasoning_service, DependsParam)
+        and not isinstance(recommendation_service, DependsParam)
     ):
         return AnalysisService(
             engine=engine,
             evidence_service=evidence_service,
             reasoning_service=reasoning_service,
+            recommendation_service=recommendation_service,
         )
 
     # When called directly outside FastAPI (e.g. background job worker)
@@ -716,4 +878,6 @@ def get_analysis_service(
         engine=None if isinstance(engine, DependsParam) else engine,
         evidence_service=None if isinstance(evidence_service, DependsParam) else evidence_service,
         reasoning_service=None if isinstance(reasoning_service, DependsParam) else reasoning_service,
+        recommendation_service=None if isinstance(recommendation_service, DependsParam) else recommendation_service,
     )
+

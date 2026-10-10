@@ -14,6 +14,7 @@ export type PipelineStage =
   | "stage1_decision_framer"
   | "stage2_evidence_engine"
   | "stage3_ai_boardroom"
+  | "stage4_recommendation"
   | "completed"
   | "failed"
   | "timed_out";
@@ -25,6 +26,8 @@ export interface AnalysisJobCreateRequest {
   owner_id?: string | null;
   timeout_seconds?: number | null;
   framer_operation_timeout_seconds?: number | null;
+  boardroom_operation_timeout_seconds?: number | null;
+  recommendation_operation_timeout_seconds?: number | null;
 }
 
 export interface AnalysisJobStatusResponse {

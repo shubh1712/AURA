@@ -5,6 +5,7 @@
 import type { DecisionModel } from "./decision";
 import type { EvidencePackage } from "./evidence";
 import type { ReasoningBoard } from "./reasoning";
+import type { DecisionRecommendation } from "./recommendation";
 
 export interface AnalysisRequest {
   question: string;
@@ -20,6 +21,9 @@ export interface AnalysisResponse {
   decision_model?: DecisionModel | null;
   evidence_package?: EvidencePackage | null;
   reasoning_board?: ReasoningBoard | null;
+  recommendation?: DecisionRecommendation | null;
+  recommendation_status?: string | null;
+  recommendation_error?: string | null;
 }
 
 export interface HealthResponse {

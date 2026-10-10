@@ -26,6 +26,7 @@ class PipelineStage(str, Enum):
     STAGE1_DECISION_FRAMER = "stage1_decision_framer"
     STAGE2_EVIDENCE_ENGINE = "stage2_evidence_engine"
     STAGE3_AI_BOARDROOM = "stage3_ai_boardroom"
+    STAGE4_RECOMMENDATION = "stage4_recommendation"
     COMPLETED = "completed"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
@@ -48,6 +49,7 @@ class AnalysisJobCreateRequest(AnalysisRequest):
                 "timeout_seconds": 180.0,
                 "framer_operation_timeout_seconds": 75.0,
                 "boardroom_operation_timeout_seconds": 75.0,
+                "recommendation_operation_timeout_seconds": 60.0,
             }
         },
     )
@@ -70,6 +72,11 @@ class AnalysisJobCreateRequest(AnalysisRequest):
         default=None,
         gt=0.0,
         description="Optional AI Boardroom perspective operation ceiling in seconds for this job.",
+    )
+    recommendation_operation_timeout_seconds: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional Recommendation & Action Planning operation ceiling in seconds for this job.",
     )
 
 

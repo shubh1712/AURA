@@ -100,6 +100,8 @@ class AnalysisJobManager:
             service.framer_operation_timeout_seconds = job.framer_timeout_seconds
         if job.boardroom_timeout_seconds is not None:
             service.boardroom_operation_timeout_seconds = job.boardroom_timeout_seconds
+        if getattr(job, "recommendation_timeout_seconds", None) is not None:
+            service.recommendation_operation_timeout_seconds = job.recommendation_timeout_seconds
 
         t_start = time.monotonic()
         deadline_monotonic = t_start + job.timeout_seconds
@@ -116,6 +118,9 @@ class AnalysisJobManager:
             elif stage_name == "stage3_ai_boardroom":
                 current_stage = PipelineStage.STAGE3_AI_BOARDROOM
                 msg = "Conducting cross-perspective deliberation (AI Boardroom)."
+            elif stage_name == "stage4_recommendation":
+                current_stage = PipelineStage.STAGE4_RECOMMENDATION
+                msg = "Developing recommendation and action plan (Recommendation Engine)."
             else:
                 msg = f"Executing stage: {stage_name}"
             logger.info(
@@ -138,11 +143,17 @@ class AnalysisJobManager:
                 stage_callback=_stage_callback,
             )
             total_duration = time.monotonic() - t_start
-            self.storage.complete_job(job_id, response)
+            completion_msg = (
+                "Analysis completed successfully."
+                if response.status == "completed"
+                else "Analysis completed with Boardroom deliberation (recommendation stage unavailable)."
+            )
+            self.storage.complete_job(job_id, response, message=completion_msg)
             logger.info(
-                "Asynchronous analysis job %s completed successfully in %.2fs.",
+                "Asynchronous analysis job %s completed in %.2fs (status: %s).",
                 job_id,
                 total_duration,
+                response.status,
             )
 
         except HTTPException as he:

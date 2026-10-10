@@ -52,6 +52,7 @@ class AnalysisRequest(BaseModel):
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
 from app.schemas.reasoning import ReasoningBoard
+from app.schemas.recommendation import DecisionRecommendation
 
 
 class AnalysisResponse(BaseModel):
@@ -96,8 +97,11 @@ class AnalysisResponse(BaseModel):
                     "summary": "0 evidence requirements.",
                 },
                 "reasoning_board": None,
+                "recommendation": None,
+                "recommendation_status": "completed",
+                "recommendation_error": None,
                 "question": "Should we migrate from a monolithic database to a distributed architecture?",
-                "message": "Decision deconstruction and evidence gathering completed successfully.",
+                "message": "Decision deconstruction, evidence gathering, boardroom deliberation, and recommendation completed successfully.",
             }
         },
     )
@@ -108,7 +112,7 @@ class AnalysisResponse(BaseModel):
     )
     status: str = Field(
         default="completed",
-        description="Current lifecycle status of the analysis ('completed', 'failed', 'staged').",
+        description="Current lifecycle status of the analysis ('completed', 'partial_success', 'failed', 'staged').",
     )
     decision_model: Optional[DecisionModel] = Field(
         default=None,
@@ -122,6 +126,18 @@ class AnalysisResponse(BaseModel):
         default=None,
         description="Authoritative AI Boardroom reasoning evaluation across canonical perspectives.",
     )
+    recommendation: Optional[DecisionRecommendation] = Field(
+        default=None,
+        description="Authoritative recommendation and action plan grounded in empirical evidence and deliberations.",
+    )
+    recommendation_status: Optional[str] = Field(
+        default=None,
+        description="Stage 4 execution status ('completed', 'unavailable', 'failed', 'timed_out').",
+    )
+    recommendation_error: Optional[str] = Field(
+        default=None,
+        description="Safe, sanitized error description if the recommendation stage was unavailable or failed.",
+    )
     question: str = Field(
         default="",
         description="The validated decision question submitted for analysis.",
@@ -130,3 +146,4 @@ class AnalysisResponse(BaseModel):
         default="Decision analysis completed successfully.",
         description="Human-readable informational message regarding the processing state.",
     )
+
