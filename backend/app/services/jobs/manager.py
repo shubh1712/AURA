@@ -98,6 +98,8 @@ class AnalysisJobManager:
         service = self.service_factory()
         if job.framer_timeout_seconds is not None:
             service.framer_operation_timeout_seconds = job.framer_timeout_seconds
+        if job.boardroom_timeout_seconds is not None:
+            service.boardroom_operation_timeout_seconds = job.boardroom_timeout_seconds
 
         t_start = time.monotonic()
         deadline_monotonic = t_start + job.timeout_seconds

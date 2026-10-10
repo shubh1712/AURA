@@ -727,3 +727,38 @@ def test_41_deterministic_ids_independent_of_python_hash_randomization() -> None
     assert resp_swapped.arguments[0].id == "arg_growth_01"
     assert resp_swapped.arguments[1].id == "arg_growth_02"
     assert resp_swapped.arguments[0].claim == cand.arguments[1].claim
+
+
+def test_42_placeholder_tokens_normalized_in_candidate_perspective() -> None:
+    """Regression test: LLM placeholder tokens ('none', 'N/A', etc.) in candidate perspectives are cleaned to []."""
+    ctx = _create_fixture_context(GROWTH)
+    cand = _valid_candidate(PerspectiveType.GROWTH)
+    cand.critical_assumption_ids = ["none", "N/A", "null"]
+    cand.evidence_gap_ids = ["no_gaps", "none"]
+    cand.arguments[0].assumption_ids = ["none"]
+    cand.arguments[0].evidence_gap_ids = ["N/A"]
+    cand.arguments[0].unknown_ids = ["none_detected"]
+
+    resp = validate_and_reconcile_candidate_perspective(cand, ctx)
+    assert resp.critical_assumption_ids == []
+    assert resp.evidence_gap_ids == []
+    assert resp.arguments[0].assumption_ids == []
+    assert resp.arguments[0].evidence_gap_ids == []
+    assert resp.arguments[0].unknown_ids == []
+
+
+def test_43_hallucinated_ids_still_rejected_with_structured_details() -> None:
+    """Regression test: genuine hallucinated IDs strictly fail with structured details."""
+    ctx = _create_fixture_context(GROWTH)
+    cand = _valid_candidate(PerspectiveType.GROWTH)
+    cand.evidence_gap_ids = ["gap_fabricated_99"]
+
+    with pytest.raises(ReasoningValidationError) as exc_info:
+        validate_and_reconcile_candidate_perspective(cand, ctx)
+
+    err = exc_info.value
+    assert "nonexistent evidence_gap_id" in str(err)
+    assert err.details.get("location") == "validator.top_level_references"
+    assert err.details.get("field") == "candidate.evidence_gap_ids"
+    assert err.details.get("rule") == "nonexistent_evidence_gap_id"
+    assert err.details.get("invalid_id") == "gap_fabricated_99"

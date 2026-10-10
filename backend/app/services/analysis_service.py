@@ -11,7 +11,7 @@ import os
 import time
 import traceback
 import uuid
-from typing import Callable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from fastapi import Depends, HTTPException, status
 from fastapi.params import Depends as DependsParam
 
@@ -88,8 +88,51 @@ def _is_timeout_error(exc: BaseException) -> bool:
             if "timed out" in msg or "timeout" in msg or "deadline" in msg:
                 return True
         visited.add(id(current))
-        current = current.__cause__ or current.__context__
     return False
+
+
+def _sanitize_reasoning_validation_diagnostic(
+    err: ReasoningValidationError,
+    stage: str,
+) -> str:
+    """Builds safe, privacy-preserving structured diagnostic text for ReasoningValidationError.
+
+    Guarantees:
+    - Never logs secrets, credentials, bearer tokens, private prompts, or raw unbounded user inputs.
+    - Reports exception type, stage, location, field paths, and sanitized details.
+    """
+    exc_type = type(err).__name__
+    raw_details = getattr(err, "details", {}) or {}
+
+    location = raw_details.get("location") or "reasoning_validator"
+    field = raw_details.get("field") or raw_details.get("field_paths") or "unknown_field"
+    rule = raw_details.get("rule") or "validation_failure"
+
+    safe_details: Dict[str, Any] = {}
+    for k, v in raw_details.items():
+        if k in ("location", "field", "field_paths", "rule"):
+            continue
+        if isinstance(v, (int, float, bool)):
+            safe_details[k] = v
+        elif isinstance(v, str):
+            if len(v) <= 80 and not any(s in v.upper() for s in ("SECRET", "KEY", "TOKEN", "BEARER", "AIZA")):
+                safe_details[k] = v
+            else:
+                safe_details[k] = "[REDACTED]"
+        elif isinstance(v, (list, tuple)):
+            safe_list = []
+            for item in v:
+                if isinstance(item, str) and len(item) <= 80 and not any(s in item.upper() for s in ("SECRET", "KEY", "TOKEN", "BEARER", "AIZA")):
+                    safe_list.append(item)
+                elif isinstance(item, (int, float, bool)):
+                    safe_list.append(item)
+                else:
+                    safe_list.append("[REDACTED]")
+            safe_details[k] = safe_list
+
+    return (
+        f"type={exc_type} stage={stage} location={location} field={field} rule={rule} details={safe_details}"
+    )
 
 
 class AnalysisService:
@@ -120,6 +163,7 @@ class AnalysisService:
         search_provider: Optional[SearchProvider] = None,
         analysis_timeout_seconds: Optional[float] = None,
         framer_operation_timeout_seconds: Optional[float] = None,
+        boardroom_operation_timeout_seconds: Optional[float] = None,
     ) -> None:
         """Initializes AnalysisService with engine, evidence_service, and reasoning_service.
 
@@ -131,31 +175,8 @@ class AnalysisService:
             search_provider: Optional pre-configured SearchProvider.
             analysis_timeout_seconds: Optional overall wall-clock analysis deadline budget in seconds.
             framer_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 1 Decision Framer.
+            boardroom_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 3 AI Boardroom perspectives.
         """
-        if engine is not None and not isinstance(engine, DependsParam):
-            self.engine = engine
-        elif llm_client is not None:
-            self.engine = QuestionUnderstandingEngine(llm_client=llm_client)
-        else:
-            self.engine = self._build_default_engine()
-
-        if evidence_service is not None and not isinstance(evidence_service, DependsParam):
-            self.evidence_service = evidence_service
-        else:
-            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
-            self.evidence_service = self._build_default_evidence_service(
-                llm_client=effective_llm,
-                search_provider=search_provider,
-            )
-
-        if reasoning_service is not None and not isinstance(reasoning_service, DependsParam):
-            self.reasoning_service = reasoning_service
-        else:
-            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
-            self.reasoning_service = self._build_default_reasoning_service(
-                llm_client=effective_llm,
-            )
-
         self.analysis_timeout_seconds: float = (
             analysis_timeout_seconds
             if analysis_timeout_seconds is not None
@@ -179,6 +200,49 @@ class AnalysisService:
             self.framer_operation_timeout_seconds: Optional[float] = float(raw_framer_to)
         else:
             self.framer_operation_timeout_seconds = None
+
+        raw_boardroom_to = boardroom_operation_timeout_seconds
+        if raw_boardroom_to is None:
+            raw_boardroom_to = getattr(settings, "AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS", None)
+            if raw_boardroom_to is None:
+                env_val = os.environ.get("AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_boardroom_to = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS value: {env_val}") from ve
+
+        if raw_boardroom_to is not None:
+            if raw_boardroom_to <= 0.0:
+                raise ValueError("boardroom_operation_timeout_seconds must be strictly greater than 0.0")
+            self.boardroom_operation_timeout_seconds: Optional[float] = float(raw_boardroom_to)
+        else:
+            self.boardroom_operation_timeout_seconds = None
+
+        if engine is not None and not isinstance(engine, DependsParam):
+            self.engine = engine
+        elif llm_client is not None:
+            self.engine = QuestionUnderstandingEngine(llm_client=llm_client)
+        else:
+            self.engine = self._build_default_engine()
+
+        if evidence_service is not None and not isinstance(evidence_service, DependsParam):
+            self.evidence_service = evidence_service
+        else:
+            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
+            self.evidence_service = self._build_default_evidence_service(
+                llm_client=effective_llm,
+                search_provider=search_provider,
+            )
+
+        if reasoning_service is not None and not isinstance(reasoning_service, DependsParam):
+            self.reasoning_service = reasoning_service
+        else:
+            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
+            self.reasoning_service = self._build_default_reasoning_service(
+                llm_client=effective_llm,
+                boardroom_operation_timeout_seconds=self.boardroom_operation_timeout_seconds,
+            )
 
     @classmethod
     def _build_default_engine(cls) -> QuestionUnderstandingEngine:
@@ -204,10 +268,14 @@ class AnalysisService:
     def _build_default_reasoning_service(
         cls,
         llm_client: Optional[LLMClient] = None,
+        boardroom_operation_timeout_seconds: Optional[float] = None,
     ) -> ReasoningService:
         """Builds default ReasoningService wired with provided or default LLMClient."""
         client = llm_client or cls.get_default_client()
-        return ReasoningService.create_default(llm_client=client)
+        return ReasoningService.create_default(
+            llm_client=client,
+            boardroom_operation_timeout_seconds=boardroom_operation_timeout_seconds,
+        )
 
     def analyze(
         self,
@@ -303,12 +371,31 @@ class AnalysisService:
             # 3. Deliberate across canonical boardroom perspectives and synthesize board
             if stage_callback:
                 stage_callback("stage3_ai_boardroom")
-            try:
-                reasoning_board = self.reasoning_service.build_reasoning_board(
-                    decision_model=decision_model,
-                    evidence_package=evidence_package,
-                    deadline_monotonic=effective_deadline,
+
+            perspective_config = None
+            if self.boardroom_operation_timeout_seconds is not None:
+                perspective_config = LLMConfig(
+                    operation_timeout_seconds=self.boardroom_operation_timeout_seconds,
+                    timeout_seconds=min(45.0, self.boardroom_operation_timeout_seconds),
                 )
+
+            boardroom_kwargs: Dict[str, Any] = {
+                "decision_model": decision_model,
+                "evidence_package": evidence_package,
+                "deadline_monotonic": effective_deadline,
+            }
+            if perspective_config is not None:
+                boardroom_kwargs["perspective_config"] = perspective_config
+
+            try:
+                try:
+                    reasoning_board = self.reasoning_service.build_reasoning_board(**boardroom_kwargs)
+                except TypeError as te:
+                    if "unexpected keyword argument 'perspective_config'" in str(te):
+                        boardroom_kwargs.pop("perspective_config", None)
+                        reasoning_board = self.reasoning_service.build_reasoning_board(**boardroom_kwargs)
+                    else:
+                        raise
             except TypeError as te:
                 if "unexpected keyword argument 'deadline_monotonic'" in str(te):
                     reasoning_board = self.reasoning_service.build_reasoning_board(
@@ -503,15 +590,26 @@ class AnalysisService:
                 ) from e
 
             # 6. Specific reasoning errors: validation or prompt construction
-            if _find_cause_instance(e, ReasoningValidationError):
-                logger.error("Analysis %s reasoning validation failed", analysis_id)
+            val_err = _find_cause_instance(e, ReasoningValidationError)
+            if val_err:
+                stage = getattr(e, "stage", None) or "reasoning"
+                diag = _sanitize_reasoning_validation_diagnostic(val_err, stage)
+                logger.error("Analysis %s reasoning validation failed: %s", analysis_id, diag)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="Reasoning validation failed during boardroom deliberation.",
                 ) from e
 
-            if _find_cause_instance(e, ReasoningPromptError):
-                logger.error("Analysis %s reasoning prompt construction failed", analysis_id)
+            prompt_err = _find_cause_instance(e, ReasoningPromptError)
+            if prompt_err:
+                stage = getattr(e, "stage", None) or "reasoning"
+                prompt_loc = getattr(prompt_err, "details", {}).get("location", "prompt_builder")
+                logger.error(
+                    "Analysis %s reasoning prompt construction failed: type=ReasoningPromptError stage=%s location=%s",
+                    analysis_id,
+                    stage,
+                    prompt_loc,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="Reasoning prompt construction failed during boardroom deliberation.",

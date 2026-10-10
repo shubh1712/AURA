@@ -773,3 +773,41 @@ def test_46_architecture_no_forbidden_fields_in_output():
     ]
     for field in forbidden:
         assert field not in dumped, f"Forbidden field '{field}' found in BoardSynthesis output"
+
+
+def test_47_placeholder_tokens_normalized_in_candidate_synthesis():
+    """Regression test: LLM placeholder strings ('none', 'N/A', 'null', etc.) are cleaned to []."""
+    dm, ep, ctx, persps, diss = build_test_artifacts()
+    cand = CandidateBoardSynthesis(
+        summary="Board agrees on target opportunity but has no critical gaps or disagreements.",
+        areas_of_agreement=["Market opportunity is significant."],
+        disagreement_ids=["none", "N/A", "null", "no_disagreements"],
+        critical_assumption_ids=["none", "none_detected"],
+        critical_evidence_gap_ids=["no_gaps", "N/A", "none"],
+        evidence_sensitive_points=["Enterprise sales cycle duration."],
+        unresolved_questions=["What is the competitive response?"],
+    )
+
+    synth = validate_candidate_synthesis(cand, dm, ep, diss)
+    assert isinstance(synth, BoardSynthesis)
+    assert synth.disagreement_ids == []
+    assert synth.critical_assumption_ids == []
+    assert synth.critical_evidence_gap_ids == []
+
+
+def test_48_hallucinated_ids_still_rejected_with_structured_details():
+    """Regression test: genuine hallucinated IDs strictly fail with structured details."""
+    dm, ep, ctx, persps, diss = build_test_artifacts()
+    cand = CandidateBoardSynthesis(
+        summary="Valid summary narrative.",
+        disagreement_ids=["dis_fake_999"],
+    )
+    with pytest.raises(ReasoningValidationError) as exc_info:
+        validate_candidate_synthesis(cand, dm, ep, diss)
+
+    err = exc_info.value
+    assert "nonexistent disagreement ID" in str(err)
+    assert err.details.get("location") == "synthesizer.validate_candidate_synthesis"
+    assert err.details.get("field") == "candidate.disagreement_ids"
+    assert err.details.get("rule") == "nonexistent_disagreement_id"
+    assert err.details.get("invalid_id") == "dis_fake_999"

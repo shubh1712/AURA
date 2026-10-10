@@ -217,3 +217,15 @@ logs/
 *.tmp
 *.temp
 dump.rdb
+
+
+# SQLlite
+*.db-wal
+*.db-shm
+
+
+*.db-wal
+*.db-shm
+
+*.db-wal
+*.db-shm

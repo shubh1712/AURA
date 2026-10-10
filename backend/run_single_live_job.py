@@ -187,6 +187,7 @@ def run_single_authorized_live_job():
             evidence_service=real_evidence_svc,
             analysis_timeout_seconds=180.0,
             framer_operation_timeout_seconds=75.0,
+            boardroom_operation_timeout_seconds=75.0,
         )
         return svc
 
@@ -212,6 +213,7 @@ def run_single_authorized_live_job():
         question=canonical_question,
         timeout_seconds=180.0,
         framer_operation_timeout_seconds=75.0,
+        boardroom_operation_timeout_seconds=75.0,
     )
 
     logger.info("Submitting single authorized live job to AnalysisJobManager...")

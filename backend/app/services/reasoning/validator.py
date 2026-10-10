@@ -11,7 +11,7 @@ DecisionModel and EvidencePackage context:
 - Zero network calls, zero LLMs, fail-closed validation.
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 import re
 
 from app.schemas.evidence import (
@@ -73,8 +73,49 @@ class ReasoningServiceError(ReasoningError):
 
 
 # ------------------------------------------------------------------------------
-# 2. Authoritative Grounding Validator & Reconciler
+# 2. Token Cleaning and Authoritative Grounding Validator & Reconciler
 # ------------------------------------------------------------------------------
+
+PLACEHOLDER_TOKENS: Set[str] = {
+    "",
+    "none",
+    "n/a",
+    "na",
+    "null",
+    "nil",
+    "no_disagreements",
+    "none_detected",
+    "no_gaps",
+    "no_critical_assumptions",
+    "no_assumptions",
+    "no_evidence_gaps",
+    "no_unknowns",
+    "(none)",
+    "(n/a)",
+    "[]",
+    "{}",
+}
+
+
+def clean_id_list(ids: Optional[Sequence[str]]) -> List[str]:
+    """Filters empty and placeholder tokens from an ID list while preserving valid IDs.
+
+    Strips whitespace from each ID token and discards common LLM empty-state representations
+    ('none', 'N/A', 'null', etc.).
+    """
+    if not ids:
+        return []
+    cleaned: List[str] = []
+    for raw in ids:
+        if not isinstance(raw, str):
+            continue
+        token = raw.strip()
+        norm = token.lower()
+        if not norm or norm in PLACEHOLDER_TOKENS:
+            continue
+        cleaned.append(token)
+    return cleaned
+
 
 def validate_and_reconcile_candidate_perspective(
     candidate: CandidatePerspectiveAnalysis,
@@ -102,7 +143,14 @@ def validate_and_reconcile_candidate_perspective(
     if candidate.perspective_type != expected_type:
         raise ReasoningValidationError(
             f"Candidate perspective_type '{candidate.perspective_type.value}' does not match "
-            f"expected perspective lens '{expected_type.value}'."
+            f"expected perspective lens '{expected_type.value}'.",
+            details={
+                "location": "validator.perspective_type",
+                "field": "candidate.perspective_type",
+                "rule": "perspective_type_mismatch",
+                "expected": expected_type.value,
+                "got": candidate.perspective_type.value,
+            },
         )
 
     # 2. Assemble Authoritative Allowed ID Sets
@@ -138,16 +186,31 @@ def validate_and_reconcile_candidate_perspective(
         item_stances.setdefault(cl.evidence_item_id, set()).add(cl.stance)
 
     # 3. Validate Top-Level Perspective References
-    for aid in candidate.critical_assumption_ids:
+    clean_top_asms = clean_id_list(candidate.critical_assumption_ids)
+    clean_top_gaps = clean_id_list(candidate.evidence_gap_ids)
+
+    for aid in clean_top_asms:
         if aid not in valid_assumption_ids:
             raise ReasoningValidationError(
-                f"Perspective '{expected_type.value}' references nonexistent critical assumption_id '{aid}'."
+                f"Perspective '{expected_type.value}' references nonexistent critical assumption_id '{aid}'.",
+                details={
+                    "location": "validator.top_level_references",
+                    "field": "candidate.critical_assumption_ids",
+                    "rule": "nonexistent_critical_assumption_id",
+                    "invalid_id": str(aid)[:50],
+                },
             )
 
-    for gid in candidate.evidence_gap_ids:
+    for gid in clean_top_gaps:
         if gid not in valid_gap_ids:
             raise ReasoningValidationError(
-                f"Perspective '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'."
+                f"Perspective '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
+                details={
+                    "location": "validator.top_level_references",
+                    "field": "candidate.evidence_gap_ids",
+                    "rule": "nonexistent_evidence_gap_id",
+                    "invalid_id": str(gid)[:50],
+                },
             )
 
     # 4. Validate Each Candidate Argument
@@ -156,95 +219,166 @@ def validate_and_reconcile_candidate_perspective(
     for idx, arg in enumerate(candidate.arguments):
         arg_label = f"Argument {idx + 1}"
 
+        clean_eids = clean_id_list(arg.evidence_item_ids)
+        clean_rids = clean_id_list(arg.requirement_ids)
+        clean_aids = clean_id_list(arg.assumption_ids)
+        clean_uids = clean_id_list(arg.unknown_ids)
+        clean_gids = clean_id_list(arg.evidence_gap_ids)
+        clean_reids = clean_id_list(arg.related_entity_ids)
+
         # 4a. Reference ID Resolution (Reject Hallucinated IDs)
-        for eid in arg.evidence_item_ids:
+        for eid in clean_eids:
             if eid not in valid_evidence_item_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_item_id '{eid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_item_id '{eid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].evidence_item_ids",
+                        "rule": "nonexistent_evidence_item_id",
+                        "invalid_id": str(eid)[:50],
+                    },
                 )
 
-        for rid in arg.requirement_ids:
+        for rid in clean_rids:
             if rid not in valid_requirement_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent requirement_id '{rid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent requirement_id '{rid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].requirement_ids",
+                        "rule": "nonexistent_requirement_id",
+                        "invalid_id": str(rid)[:50],
+                    },
                 )
 
-        for aid in arg.assumption_ids:
+        for aid in clean_aids:
             if aid not in valid_assumption_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent assumption_id '{aid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent assumption_id '{aid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].assumption_ids",
+                        "rule": "nonexistent_assumption_id",
+                        "invalid_id": str(aid)[:50],
+                    },
                 )
 
-        for uid in arg.unknown_ids:
+        for uid in clean_uids:
             if uid not in valid_unknown_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent unknown_id '{uid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].unknown_ids",
+                        "rule": "nonexistent_unknown_id",
+                        "invalid_id": str(uid)[:50],
+                    },
                 )
 
-        for gid in arg.evidence_gap_ids:
+        for gid in clean_gids:
             if gid not in valid_gap_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent evidence_gap_id '{gid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].evidence_gap_ids",
+                        "rule": "nonexistent_evidence_gap_id",
+                        "invalid_id": str(gid)[:50],
+                    },
                 )
 
-        for reid in arg.related_entity_ids:
+        for reid in clean_reids:
             if reid not in allowed_decision_entity_ids:
                 raise ReasoningValidationError(
-                    f"{arg_label} in '{expected_type.value}' references nonexistent related_entity_id '{reid}'."
+                    f"{arg_label} in '{expected_type.value}' references nonexistent related_entity_id '{reid}'.",
+                    details={
+                        "location": "validator.argument_references",
+                        "field": f"candidate.arguments[{idx}].related_entity_ids",
+                        "rule": "nonexistent_related_entity_id",
+                        "invalid_id": str(reid)[:50],
+                    },
                 )
 
         # 4b. Epistemic Basis Verification
         if arg.basis == ReasoningBasis.EVIDENCE:
-            if not arg.evidence_item_ids:
+            if not clean_eids:
                 raise ReasoningValidationError(
-                    f"{arg_label} has basis 'evidence' but references no evidence_item_ids."
+                    f"{arg_label} has basis 'evidence' but references no evidence_item_ids.",
+                    details={
+                        "location": "validator.epistemic_basis",
+                        "field": f"candidate.arguments[{idx}].evidence_item_ids",
+                        "rule": "evidence_basis_missing_evidence",
+                    },
                 )
 
         elif arg.basis == ReasoningBasis.ASSUMPTION:
-            if not arg.assumption_ids:
+            if not clean_aids:
                 raise ReasoningValidationError(
-                    f"{arg_label} has basis 'assumption' but references no assumption_ids."
+                    f"{arg_label} has basis 'assumption' but references no assumption_ids.",
+                    details={
+                        "location": "validator.epistemic_basis",
+                        "field": f"candidate.arguments[{idx}].assumption_ids",
+                        "rule": "assumption_basis_missing_assumptions",
+                    },
                 )
 
         elif arg.basis == ReasoningBasis.UNRESOLVED:
-            has_unresolved = bool(arg.unknown_ids or arg.evidence_gap_ids or arg.requirement_ids)
+            has_unresolved = bool(clean_uids or clean_gids or clean_rids)
             if not has_unresolved:
                 raise ReasoningValidationError(
                     f"{arg_label} has basis 'unresolved' but references no unresolved dependency "
-                    f"(unknown_ids, evidence_gap_ids, or requirement_ids)."
+                    f"(unknown_ids, evidence_gap_ids, or requirement_ids).",
+                    details={
+                        "location": "validator.epistemic_basis",
+                        "field": f"candidate.arguments[{idx}]",
+                        "rule": "unresolved_basis_missing_dependencies",
+                    },
                 )
 
         elif arg.basis == ReasoningBasis.MIXED:
             cat_count = sum([
-                bool(arg.evidence_item_ids),
-                bool(arg.assumption_ids),
-                bool(arg.unknown_ids or arg.evidence_gap_ids or arg.requirement_ids),
+                bool(clean_eids),
+                bool(clean_aids),
+                bool(clean_uids or clean_gids or clean_rids),
             ])
             if cat_count < 2:
                 raise ReasoningValidationError(
                     f"{arg_label} has basis 'mixed' but does not reference at least two distinct "
-                    f"epistemic categories among (evidence, assumptions, unresolved dependencies)."
+                    f"epistemic categories among (evidence, assumptions, unresolved dependencies).",
+                    details={
+                        "location": "validator.epistemic_basis",
+                        "field": f"candidate.arguments[{idx}]",
+                        "rule": "mixed_basis_insufficient_categories",
+                    },
                 )
 
         # 4c. Requirement Lineage Verification
         # If an argument explicitly references requirement_ids AND evidence_item_ids,
         # verify that the cited evidence items legitimately belong to the cited requirements.
-        if arg.requirement_ids and arg.evidence_item_ids:
-            for eid in arg.evidence_item_ids:
+        if clean_rids and clean_eids:
+            for eid in clean_eids:
                 parent_reqs = item_to_requirements.get(eid, set())
                 # If this evidence item was retrieved under specific requirements,
                 # at least one of its parent requirements must intersect with the cited requirement_ids.
-                if parent_reqs and not (parent_reqs & set(arg.requirement_ids)):
+                if parent_reqs and not (parent_reqs & set(clean_rids)):
                     raise ReasoningValidationError(
                         f"{arg_label} asserts false requirement lineage: evidence item '{eid}' is bound "
-                        f"to requirements {sorted(parent_reqs)}, but argument cites disjoint requirement_ids {sorted(arg.requirement_ids)}."
+                        f"to requirements {sorted(parent_reqs)}, but argument cites disjoint requirement_ids {sorted(clean_rids)}.",
+                        details={
+                            "location": "validator.requirement_lineage",
+                            "field": f"candidate.arguments[{idx}].requirement_ids",
+                            "rule": "false_requirement_lineage",
+                            "evidence_item_id": eid,
+                            "parent_requirements": sorted(parent_reqs),
+                            "cited_requirements": sorted(clean_rids),
+                        },
                     )
 
         # 4d. Private / Internal Data & Pending Requirement Guard
         # If an argument cites an INTERNAL_DATA, DETERMINISTIC_CALCULATION, or USER_CLARIFICATION
         # requirement that remains PENDING or has no empirical findings, it cannot claim basis 'evidence'.
         if arg.basis == ReasoningBasis.EVIDENCE:
-            for rid in arg.requirement_ids:
+            for rid in clean_rids:
                 req = requirements_by_id.get(rid)
                 if req and req.status in (RequirementStatus.PENDING, RequirementStatus.UNSUPPORTED):
                     # Check if there is any empirical evidence attached to this pending requirement
@@ -252,23 +386,34 @@ def validate_and_reconcile_candidate_perspective(
                         cl.evidence_item_id
                         for cl in req.claim_links
                     }
-                    if not req_bound_items or not (set(arg.evidence_item_ids) & req_bound_items):
+                    if not req_bound_items or not (set(clean_eids) & req_bound_items):
                         raise ReasoningValidationError(
                             f"{arg_label} cannot assert basis 'evidence' using {req.kind.value} requirement '{rid}' "
-                            f"which remains {req.status.value} with no factual findings."
+                            f"which remains {req.status.value} with no factual findings.",
+                            details={
+                                "location": "validator.pending_requirement_guard",
+                                "field": f"candidate.arguments[{idx}].requirement_ids",
+                                "rule": "pending_requirement_claimed_as_evidence",
+                                "requirement_id": rid,
+                            },
                         )
 
         # 4e. Contested & Challenging Stance Preservation
         # If all cited evidence items carry stance CHALLENGES, an argument cannot claim direction FAVORABLE
         # unless opposing supporting evidence is also cited.
-        if arg.evidence_item_ids and arg.direction == ArgumentDirection.FAVORABLE:
+        if clean_eids and arg.direction == ArgumentDirection.FAVORABLE:
             all_stances: Set[EvidenceStance] = set()
-            for eid in arg.evidence_item_ids:
+            for eid in clean_eids:
                 all_stances.update(item_stances.get(eid, set()))
             if all_stances and all_stances == {EvidenceStance.CHALLENGES}:
                 raise ReasoningValidationError(
                     f"{arg_label} asserts direction 'favorable' but only cites challenging evidence items: "
-                    f"{arg.evidence_item_ids}. Challenging evidence cannot be structurally misrepresented as favorable."
+                    f"{clean_eids}. Challenging evidence cannot be structurally misrepresented as favorable.",
+                    details={
+                        "location": "validator.stance_preservation",
+                        "field": f"candidate.arguments[{idx}].direction",
+                        "rule": "challenging_evidence_claimed_as_favorable",
+                    },
                 )
 
         # 4f. Deterministic Authoritative ID Generation (Python-controlled)
@@ -280,12 +425,12 @@ def validate_and_reconcile_candidate_perspective(
             direction=arg.direction,
             basis=arg.basis,
             reasoning=arg.reasoning,
-            evidence_item_ids=list(arg.evidence_item_ids),
-            requirement_ids=list(arg.requirement_ids),
-            assumption_ids=list(arg.assumption_ids),
-            unknown_ids=list(arg.unknown_ids),
-            evidence_gap_ids=list(arg.evidence_gap_ids),
-            related_entity_ids=list(arg.related_entity_ids),
+            evidence_item_ids=list(clean_eids),
+            requirement_ids=list(clean_rids),
+            assumption_ids=list(clean_aids),
+            unknown_ids=list(clean_uids),
+            evidence_gap_ids=list(clean_gids),
+            related_entity_ids=list(clean_reids),
             caveat=arg.caveat,
         )
         validated_arguments.append(reasoning_arg)
@@ -298,8 +443,8 @@ def validate_and_reconcile_candidate_perspective(
         perspective_type=expected_type,
         summary=candidate.summary,
         arguments=validated_arguments,
-        critical_assumption_ids=list(candidate.critical_assumption_ids),
-        evidence_gap_ids=list(candidate.evidence_gap_ids),
+        critical_assumption_ids=list(clean_top_asms),
+        evidence_gap_ids=list(clean_top_gaps),
         unresolved_questions=list(candidate.unresolved_questions),
         limitations=list(candidate.limitations),
     )

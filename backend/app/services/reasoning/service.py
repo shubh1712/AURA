@@ -27,7 +27,7 @@ from app.schemas.reasoning import (
     validate_reasoning_references,
 )
 from app.services.evidence.requirements import validate_target_reference
-from app.services.llm.client import LLMClient, LLMTimeoutError
+from app.services.llm.client import LLMClient, LLMConfig, LLMTimeoutError
 from app.services.reasoning.context_builder import build_reasoning_context
 from app.services.reasoning.disagreements import detect_disagreements
 from app.services.reasoning.evaluator import PerspectiveReasoner
@@ -152,7 +152,14 @@ def validate_upstream_artifacts(
     if evidence_package.decision_model_id != decision_model.id:
         raise ReasoningValidationError(
             f"EvidencePackage decision_model_id '{evidence_package.decision_model_id}' "
-            f"does not match DecisionModel id '{decision_model.id}'."
+            f"does not match DecisionModel id '{decision_model.id}'.",
+            details={
+                "location": "service.validate_upstream_artifacts",
+                "field": "evidence_package.decision_model_id",
+                "rule": "decision_model_id_mismatch",
+                "expected": decision_model.id,
+                "got": evidence_package.decision_model_id,
+            },
         )
 
     try:
@@ -176,7 +183,12 @@ def validate_upstream_artifacts(
             )
     except Exception as err:
         raise ReasoningValidationError(
-            f"Upstream cross-model target validation failed: {err}"
+            f"Upstream cross-model target validation failed: {err}",
+            details={
+                "location": "service.validate_upstream_artifacts",
+                "field": "upstream_artifacts",
+                "rule": "target_reference_validation_failed",
+            },
         ) from err
 
 
@@ -192,11 +204,13 @@ class ReasoningService:
         orchestrator: PerspectiveOrchestrator,
         synthesizer: BoardSynthesizer,
         clock: Optional[Callable[[], datetime]] = None,
+        perspective_config: Optional[LLMConfig] = None,
     ) -> None:
-        """Initializes ReasoningService with injected orchestrator, synthesizer, and clock."""
+        """Initializes ReasoningService with injected orchestrator, synthesizer, clock, and optional perspective_config."""
         self.orchestrator = orchestrator
         self.synthesizer = synthesizer
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.perspective_config = perspective_config
 
     @classmethod
     def create_default(
@@ -204,18 +218,28 @@ class ReasoningService:
         llm_client: LLMClient,
         max_workers: int = MAX_PERSPECTIVE_WORKERS,
         clock: Optional[Callable[[], datetime]] = None,
+        perspective_config: Optional[LLMConfig] = None,
+        boardroom_operation_timeout_seconds: Optional[float] = None,
     ) -> "ReasoningService":
         """Factory creating ReasoningService with shared injected LLMClient across all sub-services."""
-        reasoner = PerspectiveReasoner(llm_client=llm_client)
+        cfg = perspective_config
+        if cfg is None and boardroom_operation_timeout_seconds is not None:
+            cfg = LLMConfig(
+                operation_timeout_seconds=boardroom_operation_timeout_seconds,
+                timeout_seconds=min(45.0, boardroom_operation_timeout_seconds),
+            )
+        reasoner = PerspectiveReasoner(llm_client=llm_client, config=cfg)
         orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=max_workers)
         synthesizer = BoardSynthesizer(llm_client=llm_client)
-        return cls(orchestrator=orchestrator, synthesizer=synthesizer, clock=clock)
+        return cls(orchestrator=orchestrator, synthesizer=synthesizer, clock=clock, perspective_config=cfg)
 
     def build_reasoning_board(
         self,
         decision_model: DecisionModel,
         evidence_package: EvidencePackage,
         deadline_monotonic: Optional[float] = None,
+        perspective_config: Optional[LLMConfig] = None,
+        boardroom_operation_timeout_seconds: Optional[float] = None,
     ) -> ReasoningBoard:
         """Executes full boardroom deliberation and produces an authoritative ReasoningBoard.
 
@@ -256,12 +280,30 @@ class ReasoningService:
             ) from exc
 
         # Stage 2: Bounded perspective evaluation
-        try:
-            perspectives = self.orchestrator.evaluate_all(
-                decision_model=decision_model,
-                evidence_package=evidence_package,
-                deadline_monotonic=deadline_monotonic,
+        effective_persp_config = perspective_config or self.perspective_config
+        if effective_persp_config is None and boardroom_operation_timeout_seconds is not None:
+            effective_persp_config = LLMConfig(
+                operation_timeout_seconds=boardroom_operation_timeout_seconds,
+                timeout_seconds=min(45.0, boardroom_operation_timeout_seconds),
             )
+
+        try:
+            try:
+                perspectives = self.orchestrator.evaluate_all(
+                    decision_model=decision_model,
+                    evidence_package=evidence_package,
+                    deadline_monotonic=deadline_monotonic,
+                    config=effective_persp_config,
+                )
+            except TypeError as te:
+                if "unexpected keyword argument 'config'" in str(te):
+                    perspectives = self.orchestrator.evaluate_all(
+                        decision_model=decision_model,
+                        evidence_package=evidence_package,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                else:
+                    raise
         except Exception as exc:
             raise ReasoningServiceError(
                 "Reasoning perspective stage failed.",

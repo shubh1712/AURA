@@ -180,13 +180,23 @@ def detect_disagreements(
     """
     if isinstance(perspectives, (str, bytes, bytearray, dict)) or not isinstance(perspectives, (list, tuple, Sequence)):
         raise ReasoningValidationError(
-            f"Expected Sequence[ReasoningPerspective], got {type(perspectives).__name__}."
+            f"Expected Sequence[ReasoningPerspective], got {type(perspectives).__name__}.",
+            details={
+                "location": "disagreements.detect_disagreements",
+                "field": "perspectives",
+                "rule": "invalid_sequence_type",
+            },
         )
 
     for idx, p in enumerate(perspectives):
         if not isinstance(p, ReasoningPerspective):
             raise ReasoningValidationError(
-                f"Perspective at index {idx} is not an instance of ReasoningPerspective."
+                f"Perspective at index {idx} is not an instance of ReasoningPerspective.",
+                details={
+                    "location": "disagreements.detect_disagreements",
+                    "field": f"perspectives[{idx}]",
+                    "rule": "invalid_element_type",
+                },
             )
 
     # Fewer than two perspectives cannot produce cross-perspective disagreements
@@ -203,7 +213,12 @@ def detect_disagreements(
                 dup_pids.add(pid)
             seen_pids.add(pid)
         raise ReasoningValidationError(
-            f"Duplicate perspective IDs detected in input: {sorted(dup_pids)}"
+            f"Duplicate perspective IDs detected in input: {sorted(dup_pids)}",
+            details={
+                "location": "disagreements.detect_disagreements",
+                "field": "perspectives.id",
+                "rule": "duplicate_perspective_id",
+            },
         )
 
     # Validate argument ID uniqueness across perspectives
@@ -212,7 +227,13 @@ def detect_disagreements(
         for arg in p.arguments:
             if arg.id in all_arg_ids:
                 raise ReasoningValidationError(
-                    f"Duplicate argument ID '{arg.id}' detected across perspectives."
+                    f"Duplicate argument ID '{arg.id}' detected across perspectives.",
+                    details={
+                        "location": "disagreements.detect_disagreements",
+                        "field": "arguments.id",
+                        "rule": "duplicate_argument_id",
+                        "invalid_id": str(arg.id)[:50],
+                    },
                 )
             all_arg_ids.add(arg.id)
 

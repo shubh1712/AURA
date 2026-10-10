@@ -346,15 +346,25 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
     sections.append("=== EVIDENCE GAPS & CONTRADICTIONS ===\n" + ("\n".join(gap_lines) if gap_lines else "  None"))
 
     # 16. Instructions for Candidate Structured Output
+    p_lens = context.perspective.perspective_type.value
     sections.append(
         "=== ANALYSIS TASK ===\n"
         "Formulate a structured analysis strictly from the assigned perspective.\n"
         "Requirements:\n"
-        "1. Provide a comprehensive executive summary from this perspective's mandate.\n"
-        "2. Formulate discrete arguments. Each argument must specify claim, direction, basis, reasoning, "
+        f"1. Set perspective_type to exactly '{p_lens}'.\n"
+        "2. Provide a comprehensive executive summary from this perspective's mandate.\n"
+        "3. Formulate discrete arguments. Each argument must specify claim, direction, basis, reasoning, "
         "and reference only legitimate existing IDs from the context above.\n"
-        "3. Explicitly cite any critical assumptions, evidence gaps, unresolved questions, and analytical limitations.\n"
-        "4. Do NOT make a final recommendation, declare a vote, calculate a score, or formulate scenarios."
+        "4. ID Reference Conventions (Strict):\n"
+        "   - evidence_item_ids: Reference ONLY Evidence Item IDs from Section 13 (must start with 'evi_'). NEVER cite Source IDs ('src_...').\n"
+        "   - requirement_ids: If citing an evidence item, only cite requirement IDs ('req_...') listed under Requirements for that item in Section 13. If no specific requirement applies, use [].\n"
+        "   - assumption_ids: Reference ONLY Assumption IDs from Section 9 (must start with 'asm_').\n"
+        "   - unknown_ids: Reference ONLY Unknown IDs from Section 10 (must start with 'unk_').\n"
+        "   - evidence_gap_ids: Reference ONLY Gap IDs from Section 15 (must start with 'gap_').\n"
+        "   - related_entity_ids: Reference ONLY Decision Model entity IDs (e.g. 'obj_...', 'var_...', 'cnstr_...', 'stk_...').\n"
+        "5. Empty Sets: For any list field where no items apply, provide an empty array [] (NEVER strings like 'none', 'N/A', or 'null').\n"
+        "6. Explicitly cite any critical assumptions, evidence gaps, unresolved questions, and analytical limitations.\n"
+        "7. Do NOT make a final recommendation, declare a vote, calculate a score, or formulate scenarios."
     )
 
     user_prompt = "\n\n".join(sections)
@@ -363,7 +373,14 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
     if total_len > MAX_TOTAL_PROMPT_CHARS:
         raise ReasoningPromptError(
             f"Serialized perspective prompt ({total_len} chars) exceeds maximum allowable limit "
-            f"of {MAX_TOTAL_PROMPT_CHARS} characters."
+            f"of {MAX_TOTAL_PROMPT_CHARS} characters.",
+            details={
+                "location": "prompt_builder.build_perspective_prompt",
+                "field": "prompt_length",
+                "rule": "prompt_length_overflow",
+                "length": total_len,
+                "max_length": MAX_TOTAL_PROMPT_CHARS,
+            },
         )
 
     return PerspectivePrompt(

@@ -1020,6 +1020,78 @@ def test_security_secret_marker_not_leaked_in_boardroom_unexpected_error(caplog:
     assert SECRET_MARKER not in caplog.text
 
 
+def test_security_boardroom_validation_error_diagnostic_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies structured diagnostic log for ReasoningValidationError contains type, stage, location, field, rule."""
+    dm, ep, _, _, _ = build_test_artifacts()
+
+    class DiagnosticValidationReasoningService(ReasoningService):
+        def build_reasoning_board(self, *args, **kwargs) -> ReasoningBoard:
+            val_err = ReasoningValidationError(
+                "Candidate cited non-existent disagreement ID 'dis_fake_999'",
+                details={
+                    "location": "synthesizer.validate_candidate_synthesis",
+                    "field": "candidate.disagreement_ids",
+                    "rule": "nonexistent_disagreement_id",
+                    "invalid_id": "dis_fake_999",
+                },
+            )
+            svc_err = ReasoningServiceError("Synthesis validation failed", stage="synthesis")
+            svc_err.__cause__ = val_err
+            raise svc_err
+
+    service = AnalysisService(
+        engine=SpyQuestionUnderstandingEngine(dm=dm),
+        evidence_service=SpyEvidenceService(ep=ep),
+        reasoning_service=DiagnosticValidationReasoningService(None, None),  # type: ignore
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.analyze(AnalysisRequest(question="Test structured diagnostic log?"))
+
+    assert exc_info.value.status_code == 502
+    assert "Reasoning validation failed during boardroom deliberation." in exc_info.value.detail
+    # Verify structured fields in logger output
+    assert "reasoning validation failed: type=ReasoningValidationError" in caplog.text
+    assert "stage=synthesis" in caplog.text
+    assert "location=synthesizer.validate_candidate_synthesis" in caplog.text
+    assert "field=candidate.disagreement_ids" in caplog.text
+    assert "rule=nonexistent_disagreement_id" in caplog.text
+    assert "'invalid_id': 'dis_fake_999'" in caplog.text
+
+
+def test_security_boardroom_validation_error_diagnostic_redacts_credentials(caplog: pytest.LogCaptureFixture) -> None:
+    """Verifies credentials and secret markers in details are redacted in logger output."""
+    dm, ep, _, _, _ = build_test_artifacts()
+
+    class SecretDetailValidationReasoningService(ReasoningService):
+        def build_reasoning_board(self, *args, **kwargs) -> ReasoningBoard:
+            val_err = ReasoningValidationError(
+                f"Candidate leaked secret: {SECRET_MARKER}",
+                details={
+                    "api_key": "AIzaSyFakeKey1234567890",
+                    "token": "Bearer secret_token_value",
+                    "secret_data": SECRET_MARKER,
+                },
+            )
+            svc_err = ReasoningServiceError("Validation failed", stage="validation")
+            svc_err.__cause__ = val_err
+            raise svc_err
+
+    service = AnalysisService(
+        engine=SpyQuestionUnderstandingEngine(dm=dm),
+        evidence_service=SpyEvidenceService(ep=ep),
+        reasoning_service=SecretDetailValidationReasoningService(None, None),  # type: ignore
+    )
+
+    with pytest.raises(HTTPException):
+        service.analyze(AnalysisRequest(question="Test secret redaction in details?"))
+
+    assert SECRET_MARKER not in caplog.text
+    assert "AIzaSy" not in caplog.text
+    assert "secret_token_value" not in caplog.text
+    assert "[REDACTED]" in caplog.text
+
+
 # ------------------------------------------------------------------------------
 # 7. Section 26: Architecture Exclusions Tests
 # ------------------------------------------------------------------------------

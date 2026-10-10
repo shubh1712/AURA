@@ -67,12 +67,14 @@ class PerspectiveReasoner:
         self,
         perspective_context: PerspectiveContext,
         deadline_monotonic: Optional[float] = None,
+        config: Optional[LLMConfig] = None,
     ) -> ReasoningPerspective:
         """Evaluates ONE assigned boardroom perspective lens.
 
         Args:
             perspective_context: Complete immutable context for this perspective.
             deadline_monotonic: Optional monotonic deadline for bounded execution.
+            config: Optional LLM call configuration override.
 
         Returns:
             ReasoningPerspective: Validated, authoritatively grounded perspective analysis.
@@ -94,13 +96,14 @@ class PerspectiveReasoner:
         prompt = build_perspective_prompt(perspective_context)
 
         # 3. Structured candidate generation via LLMClient
+        effective_config = config or self.config
         try:
             try:
                 candidate: CandidatePerspectiveAnalysis = self.llm_client.generate_structured(
                     prompt=prompt.user_prompt,
                     response_schema=CandidatePerspectiveAnalysis,
                     system_instruction=prompt.system_instruction,
-                    config=self.config,
+                    config=effective_config,
                     deadline_monotonic=deadline_monotonic,
                 )
             except LLMTimeoutError as exc:

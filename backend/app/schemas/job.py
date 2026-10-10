@@ -47,6 +47,7 @@ class AnalysisJobCreateRequest(AnalysisRequest):
                 "owner_id": "team-infra",
                 "timeout_seconds": 180.0,
                 "framer_operation_timeout_seconds": 75.0,
+                "boardroom_operation_timeout_seconds": 75.0,
             }
         },
     )
@@ -64,6 +65,11 @@ class AnalysisJobCreateRequest(AnalysisRequest):
         default=None,
         gt=0.0,
         description="Optional Decision Framer operation ceiling in seconds for this job.",
+    )
+    boardroom_operation_timeout_seconds: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional AI Boardroom perspective operation ceiling in seconds for this job.",
     )
 
 

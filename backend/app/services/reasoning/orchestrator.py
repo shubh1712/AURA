@@ -67,7 +67,13 @@ def validate_orchestrated_perspectives(
     """
     if len(perspectives) != 4:
         raise ReasoningValidationError(
-            f"Expected exactly 4 perspectives, received {len(perspectives)}."
+            f"Expected exactly 4 perspectives, received {len(perspectives)}.",
+            details={
+                "location": "orchestrator.validate_orchestrated_perspectives",
+                "field": "perspectives",
+                "rule": "perspective_count_mismatch",
+                "count": len(perspectives),
+            },
         )
 
     canonical_types = [
@@ -84,40 +90,78 @@ def validate_orchestrated_perspectives(
     for idx, (expected_type, p) in enumerate(zip(canonical_types, perspectives)):
         if not isinstance(p, ReasoningPerspective):
             raise ReasoningValidationError(
-                f"Element at index {idx} is not a ReasoningPerspective: {type(p).__name__}."
+                f"Element at index {idx} is not a ReasoningPerspective: {type(p).__name__}.",
+                details={
+                    "location": "orchestrator.validate_orchestrated_perspectives",
+                    "field": f"perspectives[{idx}]",
+                    "rule": "invalid_element_type",
+                },
             )
 
         if p.perspective_type != expected_type:
             raise ReasoningValidationError(
                 f"Perspective at index {idx} has type '{p.perspective_type.value}', "
-                f"expected '{expected_type.value}'."
+                f"expected '{expected_type.value}'.",
+                details={
+                    "location": "orchestrator.validate_orchestrated_perspectives",
+                    "field": f"perspectives[{idx}].perspective_type",
+                    "rule": "perspective_type_order_mismatch",
+                    "expected": expected_type.value,
+                    "got": p.perspective_type.value,
+                },
             )
 
         if p.perspective_type in seen_types:
             raise ReasoningValidationError(
-                f"Duplicate perspective type encountered: '{p.perspective_type.value}'."
+                f"Duplicate perspective type encountered: '{p.perspective_type.value}'.",
+                details={
+                    "location": "orchestrator.validate_orchestrated_perspectives",
+                    "field": f"perspectives[{idx}].perspective_type",
+                    "rule": "duplicate_perspective_type",
+                },
             )
         seen_types.add(p.perspective_type)
 
         if not p.id:
             raise ReasoningValidationError(
-                f"Perspective of type '{p.perspective_type.value}' has empty ID."
+                f"Perspective of type '{p.perspective_type.value}' has empty ID.",
+                details={
+                    "location": "orchestrator.validate_orchestrated_perspectives",
+                    "field": f"perspectives[{idx}].id",
+                    "rule": "empty_perspective_id",
+                },
             )
 
         if p.id in seen_perspective_ids:
             raise ReasoningValidationError(
-                f"Duplicate perspective ID encountered: '{p.id}'."
+                f"Duplicate perspective ID encountered: '{p.id}'.",
+                details={
+                    "location": "orchestrator.validate_orchestrated_perspectives",
+                    "field": f"perspectives[{idx}].id",
+                    "rule": "duplicate_perspective_id",
+                },
             )
         seen_perspective_ids.add(p.id)
 
         for arg in p.arguments:
             if not arg.id:
                 raise ReasoningValidationError(
-                    f"Perspective '{p.id}' contains argument with empty ID."
+                    f"Perspective '{p.id}' contains argument with empty ID.",
+                    details={
+                        "location": "orchestrator.validate_orchestrated_perspectives",
+                        "field": "arguments.id",
+                        "rule": "empty_argument_id",
+                    },
                 )
             if arg.id in seen_argument_ids:
                 raise ReasoningValidationError(
-                    f"Duplicate argument ID encountered across board: '{arg.id}'."
+                    f"Duplicate argument ID encountered across board: '{arg.id}'.",
+                    details={
+                        "location": "orchestrator.validate_orchestrated_perspectives",
+                        "field": "arguments.id",
+                        "rule": "duplicate_argument_id",
+                        "invalid_id": str(arg.id)[:50],
+                    },
                 )
             seen_argument_ids.add(arg.id)
 
@@ -170,6 +214,7 @@ class PerspectiveOrchestrator:
         decision_model: DecisionModel,
         evidence_package: EvidencePackage,
         deadline_monotonic: Optional[float] = None,
+        config: Optional[LLMConfig] = None,
     ) -> Tuple[ReasoningPerspective, ...]:
         """Evaluates all four canonical perspectives concurrently or sequentially under a shared deadline.
 
@@ -177,6 +222,7 @@ class PerspectiveOrchestrator:
             decision_model: Authoritative decision problem context.
             evidence_package: Authoritative evidence package context.
             deadline_monotonic: Optional monotonic deadline for bounded execution.
+            config: Optional LLM call configuration override for perspective evaluation.
 
         Returns:
             Tuple[ReasoningPerspective, ...]: Exactly four authoritative perspectives in canonical order:
@@ -223,7 +269,13 @@ class PerspectiveOrchestrator:
             err: Optional[Exception] = None
             diag: Optional[Dict[str, Any]] = None
             try:
-                res = self.reasoner.evaluate(ctx, deadline_monotonic=deadline_monotonic)
+                try:
+                    res = self.reasoner.evaluate(ctx, deadline_monotonic=deadline_monotonic, config=config)
+                except TypeError as te:
+                    if "unexpected keyword argument 'config'" in str(te):
+                        res = self.reasoner.evaluate(ctx, deadline_monotonic=deadline_monotonic)
+                    else:
+                        raise
             except Exception as exc:
                 err = exc
             finally:

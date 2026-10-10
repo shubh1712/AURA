@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Analysis execution configuration
     ANALYSIS_TIMEOUT_SECONDS: float = 120.0
     AURA_FRAMER_OPERATION_TIMEOUT_SECONDS: Optional[float] = None
+    AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS: Optional[float] = None
 
     @field_validator("ANALYSIS_TIMEOUT_SECONDS")
     @classmethod
@@ -41,6 +42,13 @@ class Settings(BaseSettings):
     def validate_framer_timeout(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v <= 0.0:
             raise ValueError("AURA_FRAMER_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_boardroom_timeout(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0.0:
+            raise ValueError("AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
         return v
 
     # Asynchronous job configuration
