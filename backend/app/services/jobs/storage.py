@@ -113,6 +113,24 @@ class SQLiteJobStorage:
             self._conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON analysis_jobs(status);
             """)
+            # What-if simulation persistence table
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS what_if_simulations (
+                    simulation_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    analysis_id TEXT NOT NULL,
+                    baseline_fingerprint TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_simulations_job ON what_if_simulations(job_id);
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_simulations_analysis ON what_if_simulations(analysis_id);
+            """)
             self._conn.commit()
 
     def create_job(
@@ -430,3 +448,97 @@ class SQLiteJobStorage:
             scenario_timeout_seconds=row["scenario_timeout_seconds"] if "scenario_timeout_seconds" in row.keys() else None,
             progress_message=row["progress_message"],
         )
+
+    def save_simulation(
+        self,
+        simulation_id: str,
+        job_id: str,
+        analysis_id: str,
+        baseline_fingerprint: str,
+        request_json: str,
+        result_json: str,
+        created_at: Optional[str] = None,
+    ) -> None:
+        """Persists a what-if simulation run idempotently."""
+        cat = created_at or _utc_now_iso()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO what_if_simulations (
+                    simulation_id, job_id, analysis_id, baseline_fingerprint,
+                    request_json, result_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    simulation_id,
+                    job_id,
+                    analysis_id,
+                    baseline_fingerprint,
+                    request_json,
+                    result_json,
+                    cat,
+                ),
+            )
+            self._conn.commit()
+
+    def get_simulation(
+        self,
+        simulation_id: str,
+        job_id_or_analysis_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieves a persisted simulation by ID, optionally verifying parent job/analysis association."""
+        with self._lock:
+            if job_id_or_analysis_id:
+                cur = self._conn.execute(
+                    """
+                    SELECT * FROM what_if_simulations
+                    WHERE simulation_id = ? AND (job_id = ? OR analysis_id = ?);
+                    """,
+                    (simulation_id, job_id_or_analysis_id, job_id_or_analysis_id),
+                )
+            else:
+                cur = self._conn.execute(
+                    "SELECT * FROM what_if_simulations WHERE simulation_id = ?;",
+                    (simulation_id,),
+                )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return dict(row)
+
+    def list_simulations(
+        self,
+        job_id_or_analysis_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Lists all persisted simulations for a job or analysis ordered by creation date descending."""
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT * FROM what_if_simulations
+                WHERE job_id = ? OR analysis_id = ?
+                ORDER BY created_at DESC;
+                """,
+                (job_id_or_analysis_id, job_id_or_analysis_id),
+            )
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def get_job_by_any_id(self, id_str: str) -> Optional[JobRecord]:
+        """Resolves a JobRecord by either job_id directly or by internal analysis_id."""
+        job = self.get_job(id_str)
+        if job is not None:
+            return job
+
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM analysis_jobs WHERE response_json LIKE ?;",
+                (f'%"{id_str}"%',),
+            )
+            rows = cur.fetchall()
+
+        for row in rows:
+            rec = self._row_to_record(row)
+            if rec.response is not None and rec.response.analysis_id == id_str:
+                return rec
+        return None

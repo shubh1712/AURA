@@ -93,6 +93,21 @@ from app.schemas.resilience import (
     determine_resilience_rating,
     generate_deterministic_resilience_id,
 )
+from app.schemas.simulation import (
+    SimulationAdjustment,
+    SimulationCalculationStatus,
+    SimulationImpact,
+    SimulationListResponse,
+    SimulationRequest,
+    SimulationResult,
+    SimulationSubmitRequest,
+    SimulationUnit,
+    SimulationVariable,
+    SimulationVariableDiscoveryResponse,
+    SimulationVariableType,
+    compute_baseline_fingerprint,
+    generate_deterministic_simulation_id,
+)
 
 __all__ = [
     # Day 1 & Day 2 Foundation & Decision Model
@@ -185,4 +200,18 @@ __all__ = [
     "ResilienceReport",
     "determine_resilience_rating",
     "generate_deterministic_resilience_id",
+    # Day 7 Phase 7A & 7B Deterministic What-if Simulation Engine
+    "SimulationVariableType",
+    "SimulationUnit",
+    "SimulationCalculationStatus",
+    "SimulationVariable",
+    "SimulationAdjustment",
+    "SimulationRequest",
+    "SimulationImpact",
+    "SimulationResult",
+    "SimulationVariableDiscoveryResponse",
+    "SimulationSubmitRequest",
+    "SimulationListResponse",
+    "compute_baseline_fingerprint",
+    "generate_deterministic_simulation_id",
 ]

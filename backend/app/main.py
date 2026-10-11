@@ -4,6 +4,7 @@ from app.config import settings
 from app.api.routes.health import router as health_router
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.analysis_jobs import router as jobs_router
+from app.api.routes.simulation import router as simulation_router
 
 
 def create_application() -> FastAPI:
@@ -37,6 +38,9 @@ def create_application() -> FastAPI:
     app.include_router(jobs_router, prefix=settings.API_V1_STR)
     # Also support un-prefixed paths: POST /analysis/jobs, GET /analysis/jobs/{job_id}, etc.
     app.include_router(jobs_router)
+    # Day 7 Phase 7B What-if Simulation routes
+    app.include_router(simulation_router, prefix=settings.API_V1_STR)
+    app.include_router(simulation_router)
 
     return app
 
