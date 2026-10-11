@@ -386,6 +386,15 @@ class FakeLLMClient(LLMClient):
         except ImportError:
             pass
 
+        # If requesting CandidateScenarioSet, construct realistic candidate scenario set
+        try:
+            from app.schemas.scenario import CandidateScenarioSet
+            if issubclass(response_schema, CandidateScenarioSet):
+                from app.services.llm.mock_data import get_default_candidate_scenario_set
+                return get_default_candidate_scenario_set()  # type: ignore
+        except ImportError:
+            pass
+
         try:
             return response_schema.model_validate({})
         except ValidationError as e:

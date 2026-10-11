@@ -102,6 +102,8 @@ class AnalysisJobManager:
             service.boardroom_operation_timeout_seconds = job.boardroom_timeout_seconds
         if getattr(job, "recommendation_timeout_seconds", None) is not None:
             service.recommendation_operation_timeout_seconds = job.recommendation_timeout_seconds
+        if getattr(job, "scenario_timeout_seconds", None) is not None:
+            service.scenario_operation_timeout_seconds = job.scenario_timeout_seconds
 
         t_start = time.monotonic()
         deadline_monotonic = t_start + job.timeout_seconds
@@ -121,6 +123,12 @@ class AnalysisJobManager:
             elif stage_name == "stage4_recommendation":
                 current_stage = PipelineStage.STAGE4_RECOMMENDATION
                 msg = "Developing recommendation and action plan (Recommendation Engine)."
+            elif stage_name == "stage5_scenarios":
+                current_stage = PipelineStage.STAGE5_SCENARIOS
+                msg = "Generating future scenarios and milestones (Scenario Engine)."
+            elif stage_name == "stage6_resilience":
+                current_stage = PipelineStage.STAGE6_RESILIENCE
+                msg = "Evaluating decision resilience (Deterministic Resilience Engine)."
             else:
                 msg = f"Executing stage: {stage_name}"
             logger.info(
@@ -143,11 +151,16 @@ class AnalysisJobManager:
                 stage_callback=_stage_callback,
             )
             total_duration = time.monotonic() - t_start
-            completion_msg = (
-                "Analysis completed successfully."
-                if response.status == "completed"
-                else "Analysis completed with Boardroom deliberation (recommendation stage unavailable)."
-            )
+            if response.status == "completed":
+                completion_msg = "Analysis completed successfully."
+            elif getattr(response, "resilience", None) is None and getattr(response, "scenarios", None) is not None:
+                completion_msg = "Analysis completed with scenarios (resilience evaluation unavailable)."
+            elif getattr(response, "scenarios", None) is None and getattr(response, "recommendation", None) is not None:
+                completion_msg = "Analysis completed with recommendation (scenario generation unavailable)."
+            elif getattr(response, "recommendation", None) is None:
+                completion_msg = "Analysis completed with Boardroom deliberation (recommendation stage unavailable)."
+            else:
+                completion_msg = "Analysis completed with partial success."
             self.storage.complete_job(job_id, response, message=completion_msg)
             logger.info(
                 "Asynchronous analysis job %s completed in %.2fs (status: %s).",

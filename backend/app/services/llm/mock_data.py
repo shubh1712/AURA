@@ -4,6 +4,8 @@ Provides a canonical, fully-typed DecisionModel instance for use in unit tests
 and offline development without active external LLM connections.
 """
 
+from typing import Any
+
 from app.schemas.decision_model import (
     Assumption,
     Complexity,
@@ -198,4 +200,105 @@ def get_default_candidate_recommendation():
             ],
             key_milestones=["Pilot review", "Scaled rollout"],
         ),
+    )
+
+
+def get_default_candidate_scenario_set() -> Any:
+    """Generates a valid canonical CandidateScenarioSet for offline testing without external LLMs."""
+    from app.schemas.scenario import (
+        CandidateFutureScenario,
+        CandidateScenarioKeyEvent,
+        CandidateScenarioMilestone,
+        CandidateScenarioSet,
+        ScenarioType,
+    )
+
+    return CandidateScenarioSet(
+        summary="Comprehensive future scenario simulations evaluating decision pathways across optimistic, base case, and pessimistic conditions.",
+        scenarios=[
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.OPTIMISTIC,
+                probability=0.25,
+                name="Optimistic Trajectory & Rapid Expansion",
+                narrative="Under this optimistic trajectory, strategic objectives are achieved ahead of schedule with high operational leverage and market tailwinds.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Early Validation Milestone",
+                        description="Initial adoption metrics exceed baseline expectations by 30%.",
+                        timeframe="Month 3",
+                        impact_on_decision="Accelerates rollout objectives.",
+                    )
+                ],
+                risks=["Scaling capacity constraints"],
+                opportunities=["Rapid market leadership capture"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Initial Gate Passed",
+                        description="Core pilot milestone successfully completed.",
+                        time_horizon="Month 3",
+                        expected_outcome="Target growth achieved.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.BASE_CASE,
+                probability=0.50,
+                name="Base Case Trajectory & Measured Progress",
+                narrative="Under the base case, the organization executes disciplined milestone-gated implementation with steady operational progress.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Target Milestone Reached",
+                        description="Operational milestones achieved within planned variance.",
+                        timeframe="Month 6",
+                        impact_on_decision="Confirms baseline operational expectations.",
+                    )
+                ],
+                risks=["Execution cadence friction"],
+                opportunities=["Predictable sustainable growth"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Mid-term Review",
+                        description="Evaluation of core performance metrics.",
+                        time_horizon="Month 6",
+                        expected_outcome="Baseline objectives achieved.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.PESSIMISTIC,
+                probability=0.25,
+                name="Pessimistic Trajectory & Defensive Positioning",
+                narrative="Under the pessimistic scenario, adverse market shifts or operational delays require defensive risk mitigation and contingency controls.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Downside Trigger Checkpoint",
+                        description="Adverse conditions necessitate activating defensive controls.",
+                        timeframe="Month 4",
+                        impact_on_decision="Triggers contingency mitigation protocols.",
+                    )
+                ],
+                risks=["Extended resource burn", "Macro headwinds"],
+                opportunities=["Operational tightening and resilience building"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Defensive Reassessment",
+                        description="Contingency protocols activated to preserve capital.",
+                        time_horizon="Month 4",
+                        expected_outcome="Capital preservation and downside capped.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
+        ],
     )

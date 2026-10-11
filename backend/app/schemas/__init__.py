@@ -72,6 +72,27 @@ from app.schemas.recommendation import (
     UncertaintyAssessment,
     generate_deterministic_recommendation_id,
 )
+from app.schemas.scenario import (
+    CandidateFutureScenario,
+    CandidateScenarioKeyEvent,
+    CandidateScenarioMilestone,
+    CandidateScenarioSet,
+    FutureScenario,
+    ScenarioKeyEvent,
+    ScenarioMilestone,
+    ScenarioSet,
+    ScenarioType,
+    generate_deterministic_scenario_id,
+    generate_deterministic_scenarioset_id,
+)
+from app.schemas.resilience import (
+    ResiliencePillar,
+    ResilienceRating,
+    ResilienceReport,
+    ResilienceSubScore,
+    determine_resilience_rating,
+    generate_deterministic_resilience_id,
+)
 
 __all__ = [
     # Day 1 & Day 2 Foundation & Decision Model
@@ -145,4 +166,23 @@ __all__ = [
     "CandidateUncertaintyAssessment",
     "CandidateDecisionRecommendation",
     "generate_deterministic_recommendation_id",
+    # Day 5 Phase 5A Future Scenario Engine
+    "ScenarioType",
+    "ScenarioKeyEvent",
+    "ScenarioMilestone",
+    "FutureScenario",
+    "ScenarioSet",
+    "CandidateScenarioKeyEvent",
+    "CandidateScenarioMilestone",
+    "CandidateFutureScenario",
+    "CandidateScenarioSet",
+    "generate_deterministic_scenario_id",
+    "generate_deterministic_scenarioset_id",
+    # Day 6 Phase 6A Deterministic Resilience Engine
+    "ResilienceRating",
+    "ResiliencePillar",
+    "ResilienceSubScore",
+    "ResilienceReport",
+    "determine_resilience_rating",
+    "generate_deterministic_resilience_id",
 ]

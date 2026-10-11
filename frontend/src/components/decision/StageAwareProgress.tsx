@@ -46,6 +46,16 @@ const STAGES: StageStep[] = [
     description: "Formulating evidence-linked recommendation and action plan",
   },
   {
+    key: "stage5_scenarios",
+    label: "Simulating future scenarios",
+    description: "Projecting optimistic, base-case, and pessimistic trajectories",
+  },
+  {
+    key: "stage6_resilience",
+    label: "Evaluating decision resilience",
+    description: "Stress-testing vulnerabilities, contingencies, and constraint boundaries",
+  },
+  {
     key: "completed",
     label: "Complete",
     description: "Validated analysis report assembled",
@@ -58,7 +68,9 @@ const STAGE_ORDER: Record<string, number> = {
   stage2_evidence_engine: 2,
   stage3_ai_boardroom: 3,
   stage4_recommendation: 4,
-  completed: 5,
+  stage5_scenarios: 5,
+  stage6_resilience: 6,
+  completed: 7,
 };
 
 export function StageAwareProgress({

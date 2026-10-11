@@ -17,4 +17,5 @@ export type {
 } from "./recommendation";
 export * from "./job";
 export * from "./api";
-
+export * from "./scenario";
+export * from "./resilience";

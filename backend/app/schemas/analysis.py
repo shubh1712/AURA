@@ -53,6 +53,8 @@ from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
 from app.schemas.reasoning import ReasoningBoard
 from app.schemas.recommendation import DecisionRecommendation
+from app.schemas.resilience import ResilienceReport
+from app.schemas.scenario import ScenarioSet
 
 
 class AnalysisResponse(BaseModel):
@@ -100,8 +102,14 @@ class AnalysisResponse(BaseModel):
                 "recommendation": None,
                 "recommendation_status": "completed",
                 "recommendation_error": None,
+                "scenarios": None,
+                "scenario_status": "completed",
+                "scenario_error": None,
+                "resilience": None,
+                "resilience_status": "completed",
+                "resilience_error": None,
                 "question": "Should we migrate from a monolithic database to a distributed architecture?",
-                "message": "Decision deconstruction, evidence gathering, boardroom deliberation, and recommendation completed successfully.",
+                "message": "Decision deconstruction, evidence gathering, boardroom deliberation, recommendation, and scenario simulation completed successfully. Decision resilience evaluation completed successfully.",
             }
         },
     )
@@ -137,6 +145,30 @@ class AnalysisResponse(BaseModel):
     recommendation_error: Optional[str] = Field(
         default=None,
         description="Safe, sanitized error description if the recommendation stage was unavailable or failed.",
+    )
+    scenarios: Optional[ScenarioSet] = Field(
+        default=None,
+        description="Authoritative future scenario set (optimistic, base case, pessimistic) with timelines, risks, and events.",
+    )
+    scenario_status: Optional[str] = Field(
+        default=None,
+        description="Stage 5 execution status ('completed', 'unavailable', 'failed', 'timed_out').",
+    )
+    scenario_error: Optional[str] = Field(
+        default=None,
+        description="Safe, sanitized error description if the scenario stage was unavailable or failed.",
+    )
+    resilience: Optional[ResilienceReport] = Field(
+        default=None,
+        description="Authoritative deterministic resilience evaluation and stress-test report across four scoring pillars.",
+    )
+    resilience_status: Optional[str] = Field(
+        default=None,
+        description="Stage 6 execution status ('completed', 'unavailable', 'failed', 'timed_out').",
+    )
+    resilience_error: Optional[str] = Field(
+        default=None,
+        description="Safe, sanitized error description if the resilience stage was unavailable or failed.",
     )
     question: str = Field(
         default="",

@@ -60,6 +60,17 @@ from app.services.recommendation import (
     RecommendationServiceError,
     RecommendationValidationError,
 )
+from app.schemas.scenario import ScenarioSet
+from app.schemas.resilience import ResilienceReport
+from app.engines.resilience import evaluate_resilience
+from app.services.scenario import (
+    ScenarioError,
+    ScenarioEvaluationError,
+    ScenarioPromptError,
+    ScenarioService,
+    ScenarioServiceError,
+    ScenarioValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +110,8 @@ def _is_timeout_error(exc: BaseException) -> bool:
                 ReasoningServiceError,
                 RecommendationEvaluationError,
                 RecommendationServiceError,
+                ScenarioEvaluationError,
+                ScenarioServiceError,
             ),
         ):
             details = getattr(current, "details", {})
@@ -182,26 +195,30 @@ class AnalysisService:
         evidence_service: Optional[EvidenceService] = None,
         reasoning_service: Optional[ReasoningService] = None,
         recommendation_service: Optional[RecommendationService] = None,
+        scenario_service: Optional[ScenarioService] = None,
         llm_client: Optional[LLMClient] = None,
         search_provider: Optional[SearchProvider] = None,
         analysis_timeout_seconds: Optional[float] = None,
         framer_operation_timeout_seconds: Optional[float] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
         recommendation_operation_timeout_seconds: Optional[float] = None,
+        scenario_operation_timeout_seconds: Optional[float] = None,
     ) -> None:
-        """Initializes AnalysisService with engine, evidence_service, reasoning_service, and recommendation_service.
+        """Initializes AnalysisService with engine, evidence_service, reasoning_service, recommendation_service, and scenario_service.
 
         Args:
             engine: Optional pre-configured QuestionUnderstandingEngine.
             evidence_service: Optional pre-configured EvidenceService.
             reasoning_service: Optional pre-configured ReasoningService.
             recommendation_service: Optional pre-configured RecommendationService.
+            scenario_service: Optional pre-configured ScenarioService.
             llm_client: Optional pre-configured LLMClient.
             search_provider: Optional pre-configured SearchProvider.
             analysis_timeout_seconds: Optional overall wall-clock analysis deadline budget in seconds.
             framer_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 1 Decision Framer.
             boardroom_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 3 AI Boardroom perspectives.
             recommendation_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 4 Recommendation Engine.
+            scenario_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 5 Scenario Generator.
         """
         self.analysis_timeout_seconds: float = (
             analysis_timeout_seconds
@@ -263,6 +280,24 @@ class AnalysisService:
         else:
             self.recommendation_operation_timeout_seconds = None
 
+        raw_scenario_to = scenario_operation_timeout_seconds
+        if raw_scenario_to is None:
+            raw_scenario_to = getattr(settings, "AURA_SCENARIO_OPERATION_TIMEOUT_SECONDS", None)
+            if raw_scenario_to is None:
+                env_val = os.environ.get("AURA_SCENARIO_OPERATION_TIMEOUT_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_scenario_to = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_SCENARIO_OPERATION_TIMEOUT_SECONDS value: {env_val}") from ve
+
+        if raw_scenario_to is not None:
+            if raw_scenario_to <= 0.0:
+                raise ValueError("scenario_operation_timeout_seconds must be strictly greater than 0.0")
+            self.scenario_operation_timeout_seconds: Optional[float] = float(raw_scenario_to)
+        else:
+            self.scenario_operation_timeout_seconds = None
+
         if engine is not None and not isinstance(engine, DependsParam):
             self.engine = engine
         elif llm_client is not None:
@@ -295,6 +330,15 @@ class AnalysisService:
             self.recommendation_service = self._build_default_recommendation_service(
                 llm_client=effective_llm,
                 recommendation_operation_timeout_seconds=self.recommendation_operation_timeout_seconds,
+            )
+
+        if scenario_service is not None and not isinstance(scenario_service, DependsParam):
+            self.scenario_service = scenario_service
+        else:
+            effective_llm = llm_client or getattr(self.engine, "llm_client", None)
+            self.scenario_service = self._build_default_scenario_service(
+                llm_client=effective_llm,
+                scenario_operation_timeout_seconds=self.scenario_operation_timeout_seconds,
             )
 
     @classmethod
@@ -341,6 +385,19 @@ class AnalysisService:
         return RecommendationService.create_default(
             llm_client=client,
             recommendation_operation_timeout_seconds=recommendation_operation_timeout_seconds,
+        )
+
+    @classmethod
+    def _build_default_scenario_service(
+        cls,
+        llm_client: Optional[LLMClient] = None,
+        scenario_operation_timeout_seconds: Optional[float] = None,
+    ) -> ScenarioService:
+        """Builds default ScenarioService wired with provided or default LLMClient."""
+        client = llm_client or cls.get_default_client()
+        return ScenarioService.create_default(
+            llm_client=client,
+            scenario_operation_timeout_seconds=scenario_operation_timeout_seconds,
         )
 
     def analyze(
@@ -529,14 +586,143 @@ class AnalysisService:
                     else:
                         recommendation_error = f"Recommendation generation unavailable: {getattr(exc, 'message', str(exc))}"
 
-            # 5. Assemble validated response
-            is_full_success = recommendation is not None
-            overall_status = "completed" if is_full_success else "partial_success"
-            message_text = (
-                "Decision deconstruction, evidence gathering, boardroom deliberation, and recommendation completed successfully."
-                if is_full_success
-                else f"Decision analysis completed with Boardroom deliberation; recommendation stage unavailable ({recommendation_error})."
+            # 5. Generate future scenarios & milestones (Scenario Engine)
+            if stage_callback:
+                stage_callback("stage5_scenarios")
+
+            scenarios: Optional[ScenarioSet] = None
+            scenario_status: Optional[str] = None
+            scenario_error: Optional[str] = None
+
+            # Enforce dependency policy: Stage 5 requires authoritative recommendation from Stage 4
+            if recommendation is None:
+                logger.warning(
+                    "Analysis %s Stage 5 scenario generation skipped: prerequisite Stage 4 recommendation was unavailable.",
+                    analysis_id,
+                )
+                scenario_status = "unavailable"
+                scenario_error = "Stage 5 scenario generation skipped: prerequisite Stage 4 recommendation was unavailable."
+            elif time.monotonic() >= effective_deadline:
+                logger.warning(
+                    "Analysis %s exceeded end-to-end deadline before Stage 5 scenario generation.",
+                    analysis_id,
+                )
+                scenario_status = "unavailable"
+                scenario_error = "Stage 5 scenario generation skipped: global analysis deadline expired."
+            else:
+                scenario_config = None
+                if self.scenario_operation_timeout_seconds is not None:
+                    scenario_config = LLMConfig(
+                        operation_timeout_seconds=self.scenario_operation_timeout_seconds,
+                        timeout_seconds=min(45.0, self.scenario_operation_timeout_seconds),
+                    )
+
+                scen_kwargs: Dict[str, Any] = {
+                    "decision_model": decision_model,
+                    "evidence_package": evidence_package,
+                    "reasoning_board": reasoning_board,
+                    "recommendation": recommendation,
+                    "deadline_monotonic": effective_deadline,
+                }
+                if scenario_config is not None:
+                    scen_kwargs["scenario_config"] = scenario_config
+
+                try:
+                    try:
+                        scenarios = self.scenario_service.generate_scenarios(**scen_kwargs)
+                    except TypeError as te:
+                        if "unexpected keyword argument 'scenario_config'" in str(te):
+                            scen_kwargs.pop("scenario_config", None)
+                            scenarios = self.scenario_service.generate_scenarios(**scen_kwargs)
+                        else:
+                            raise
+                    scenario_status = "completed"
+                except Exception as exc:
+                    # Explicit Product Failure Policy:
+                    # If Stages 1-4 succeed but Stage 5 fails, preserve completed upstream artifacts
+                    # and expose scenarios as unavailable.
+                    logger.warning(
+                        "Analysis %s Stage 5 scenario generation failed; preserving upstream outputs. Error: %s: %s",
+                        analysis_id,
+                        type(exc).__name__,
+                        str(exc),
+                    )
+                    scenario_status = "unavailable"
+                    if _is_timeout_error(exc):
+                        scenario_error = f"Scenario generation timed out: {getattr(exc, 'message', str(exc))}"
+                    else:
+                        scenario_error = f"Scenario generation unavailable: {getattr(exc, 'message', str(exc))}"
+
+            # 6. Evaluate decision resilience (Deterministic Resilience Engine)
+            if stage_callback:
+                stage_callback("stage6_resilience")
+
+            resilience: Optional[ResilienceReport] = None
+            resilience_status: Optional[str] = None
+            resilience_error: Optional[str] = None
+
+            # Enforce dependency policy: Stage 6 requires authoritative ScenarioSet and all inputs
+            if scenarios is None or recommendation is None:
+                logger.warning(
+                    "Analysis %s Stage 6 resilience evaluation skipped: prerequisite upstream artifacts unavailable (scenarios=%s, recommendation=%s).",
+                    analysis_id,
+                    scenarios is not None,
+                    recommendation is not None,
+                )
+                resilience_status = "unavailable"
+                if scenarios is None and recommendation is not None:
+                    resilience_error = "Stage 6 resilience evaluation skipped: prerequisite Stage 5 scenarios were unavailable."
+                elif recommendation is None:
+                    resilience_error = "Stage 6 resilience evaluation skipped: prerequisite Stage 4 recommendation was unavailable."
+                else:
+                    resilience_error = "Stage 6 resilience evaluation skipped: prerequisite upstream artifacts were unavailable."
+            elif time.monotonic() >= effective_deadline:
+                logger.warning(
+                    "Analysis %s exceeded end-to-end deadline before Stage 6 resilience evaluation.",
+                    analysis_id,
+                )
+                resilience_status = "unavailable"
+                resilience_error = "Stage 6 resilience evaluation skipped: global analysis deadline expired."
+            else:
+                try:
+                    resilience = evaluate_resilience(
+                        decision_model=decision_model,
+                        scenario_set=scenarios,
+                        recommendation=recommendation,
+                        evidence_package=evidence_package,
+                        reasoning_board=reasoning_board,
+                    )
+                    resilience_status = "completed"
+                except Exception as exc:
+                    # Explicit Product Failure Policy:
+                    # If Stages 1-5 succeed but Stage 6 fails, preserve completed upstream artifacts
+                    # and expose resilience as unavailable with partial_success.
+                    logger.warning(
+                        "Analysis %s Stage 6 resilience evaluation failed; preserving upstream outputs. Error: %s: %s",
+                        analysis_id,
+                        type(exc).__name__,
+                        str(exc),
+                    )
+                    resilience_status = "unavailable"
+                    resilience_error = f"Resilience evaluation unavailable: {str(exc)}"
+
+            # 7. Assemble validated response
+            is_full_success = (
+                recommendation is not None
+                and scenarios is not None
+                and resilience is not None
             )
+            overall_status = "completed" if is_full_success else "partial_success"
+            if is_full_success:
+                message_text = "Decision deconstruction, evidence gathering, boardroom deliberation, recommendation, and scenario simulation completed successfully. Decision resilience evaluation completed successfully."
+            elif scenarios is not None and resilience is None:
+                message_text = f"Decision analysis completed with scenarios; resilience stage unavailable ({resilience_error})."
+            elif recommendation is not None and scenarios is None:
+                message_text = f"Decision analysis completed with recommendation; scenario stage unavailable ({scenario_error})."
+            elif reasoning_board is not None:
+                message_text = f"Decision analysis completed with Boardroom deliberation; recommendation stage unavailable ({recommendation_error})."
+            else:
+                message_text = "Decision analysis completed with partial success."
 
             return AnalysisResponse(
                 analysis_id=analysis_id,
@@ -547,6 +733,12 @@ class AnalysisService:
                 recommendation=recommendation,
                 recommendation_status=recommendation_status,
                 recommendation_error=recommendation_error,
+                scenarios=scenarios,
+                scenario_status=scenario_status,
+                scenario_error=scenario_error,
+                resilience=resilience,
+                resilience_status=resilience_status,
+                resilience_error=resilience_error,
                 question=request.question,
                 message=message_text,
             )
@@ -857,11 +1049,22 @@ def get_recommendation_service(
     )
 
 
+def get_scenario_service(
+    llm_client: LLMClient = Depends(get_llm_client),
+) -> ScenarioService:
+    """FastAPI dependency provider for ScenarioService."""
+    client = None if isinstance(llm_client, DependsParam) else llm_client
+    return ScenarioService.create_default(
+        llm_client=client or get_llm_client(),
+    )
+
+
 def get_analysis_service(
     engine: QuestionUnderstandingEngine = Depends(get_question_understanding_engine),
     evidence_service: EvidenceService = Depends(get_evidence_service),
     reasoning_service: ReasoningService = Depends(get_reasoning_service),
     recommendation_service: RecommendationService = Depends(get_recommendation_service),
+    scenario_service: ScenarioService = Depends(get_scenario_service),
 ) -> AnalysisService:
     """FastAPI dependency provider for AnalysisService."""
     if (
@@ -869,12 +1072,14 @@ def get_analysis_service(
         and not isinstance(evidence_service, DependsParam)
         and not isinstance(reasoning_service, DependsParam)
         and not isinstance(recommendation_service, DependsParam)
+        and not isinstance(scenario_service, DependsParam)
     ):
         return AnalysisService(
             engine=engine,
             evidence_service=evidence_service,
             reasoning_service=reasoning_service,
             recommendation_service=recommendation_service,
+            scenario_service=scenario_service,
         )
 
     # When called directly outside FastAPI (e.g. background job worker)
@@ -892,5 +1097,6 @@ def get_analysis_service(
         evidence_service=None if isinstance(evidence_service, DependsParam) else evidence_service,
         reasoning_service=None if isinstance(reasoning_service, DependsParam) else reasoning_service,
         recommendation_service=None if isinstance(recommendation_service, DependsParam) else recommendation_service,
+        scenario_service=None if isinstance(scenario_service, DependsParam) else scenario_service,
     )
 

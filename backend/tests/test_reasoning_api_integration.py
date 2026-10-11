@@ -1107,9 +1107,8 @@ def test_architecture_exclusions_no_future_engines_or_voting() -> None:
         reasoning_board=board,
     )
 
-    # 1. AnalysisResponse has NO future engine fields beyond Day 5 recommendation
+    # 1. AnalysisResponse has NO future engine fields beyond Day 6 resilience
     assert not hasattr(response, "scenario_analysis")
-    assert not hasattr(response, "resilience")
     assert not hasattr(response, "what_if")
 
     # 2. ReasoningBoard has NO voting, majority, or scoring fields

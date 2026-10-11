@@ -12,6 +12,14 @@ import {
   RecommendationDashboard,
   PartialSuccessBanner,
 } from "./recommendation";
+import {
+  FutureExplorerDashboard,
+  ScenarioUnavailableBanner,
+} from "./scenario";
+import {
+  ResilienceDashboard,
+  ResilienceUnavailableBanner,
+} from "./resilience";
 
 interface AnalysisResultCardProps {
   result: AnalysisResponse;
@@ -41,19 +49,55 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
   const hasEvidencePackage = Boolean(result.evidence_package);
   const hasReasoningBoard = Boolean(result.reasoning_board);
 
-  // Analysis result state evaluation
+  // Stage 4 Recommendation state evaluation
+  const hasValidRecommendation = Boolean(result.recommendation);
+  const isRecommendationUnavailable =
+    !hasValidRecommendation &&
+    (result.recommendation_status === "unavailable" ||
+      (result.status === "partial_success" && !result.recommendation));
+
+  const isRecommendationInconsistent =
+    result.recommendation_status === "completed" && !result.recommendation;
+
+  // Stage 5 Scenario Engine state evaluation
+  const hasValidScenarios = Boolean(
+    result.scenarios &&
+      result.scenarios.scenarios &&
+      result.scenarios.scenarios.length === 3
+  );
+
+  const isScenarioUnavailable =
+    !hasValidScenarios &&
+    (result.scenario_status === "unavailable" ||
+      (result.status === "partial_success" && Boolean(result.scenario_error)));
+
+  const isScenarioInconsistent =
+    result.scenario_status === "completed" && !result.scenarios;
+
+  // Stage 6 Resilience Engine state evaluation
+  const hasValidResilience = Boolean(result.resilience);
+  const isResilienceUnavailable =
+    !hasValidResilience &&
+    (result.resilience_status === "unavailable" ||
+      (result.status === "partial_success" && Boolean(result.resilience_error)));
+
+  const isResilienceInconsistent =
+    result.resilience_status === "completed" && !result.resilience;
+
+  // Overall analysis state evaluation
   const isPartialSuccess =
     result.status === "partial_success" ||
-    (result.recommendation_status === "unavailable" && !result.recommendation);
-
-  const hasValidRecommendation = Boolean(result.recommendation);
-
-  const isInconsistent =
-    result.recommendation_status === "completed" && !result.recommendation;
+    isRecommendationUnavailable ||
+    isScenarioUnavailable ||
+    isResilienceUnavailable;
 
   const isHistorical =
     !hasValidRecommendation &&
+    !hasValidScenarios &&
+    !hasValidResilience &&
     !result.recommendation_status &&
+    !result.scenario_status &&
+    !result.resilience_status &&
     result.status === "completed";
 
   return (
@@ -199,7 +243,7 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
       )}
 
       {/* 2b. Partial Success Banner (Stage 4 Failed while Stages 1-3 Succeeded) */}
-      {isPartialSuccess && (
+      {isRecommendationUnavailable && (
         <section aria-label="Partial Analysis Notice">
           <PartialSuccessBanner
             recommendationError={result.recommendation_error}
@@ -208,7 +252,7 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
       )}
 
       {/* 2c. Unexpected Inconsistent Data Fallback */}
-      {isInconsistent && (
+      {isRecommendationInconsistent && (
         <div
           role="alert"
           className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-5 text-xs text-amber-200 space-y-2 print:bg-zinc-50 print:border-zinc-300 print:text-black"
@@ -224,11 +268,88 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
         </div>
       )}
 
-      {/* 2d. Historical Day 4 Analysis Note (Only rendered if user needs clarification, but no error or failure message) */}
+      {/* 2d. Stage 5: Future Explorer Dashboard */}
+      {hasValidScenarios && result.scenarios && (
+        <section aria-label="Future Explorer">
+          <FutureExplorerDashboard
+            scenarioSet={result.scenarios}
+            decisionModel={result.decision_model}
+            evidencePackage={result.evidence_package}
+            decisionTitle={result.decision_model?.decision?.summary || result.question}
+          />
+        </section>
+      )}
+
+      {/* 2e. Stage 5: Scenario Unavailable Banner */}
+      {isScenarioUnavailable && (
+        <section aria-label="Scenario Unavailable Notice">
+          <ScenarioUnavailableBanner
+            scenarioError={result.scenario_error}
+          />
+        </section>
+      )}
+
+      {/* 2f. Unexpected Inconsistent Scenario Data Fallback */}
+      {isScenarioInconsistent && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-5 text-xs text-amber-200 space-y-2 print:bg-zinc-50 print:border-zinc-300 print:text-black"
+        >
+          <div className="flex items-center gap-2 font-semibold text-amber-300 print:text-black">
+            <span className="h-2 w-2 rounded-full bg-amber-400" />
+            Inconsistent Scenario State Detected
+          </div>
+          <p className="leading-relaxed">
+            The analysis service reported that Stage 5 completed, but the scenarios payload was missing from the response.
+            The structured decision model, evidence package, boardroom deliberation, and recommendation remain intact and accessible.
+          </p>
+        </div>
+      )}
+
+      {/* 2g. Stage 6: Resilience Dashboard */}
+      {hasValidResilience && result.resilience && (
+        <section aria-label="Decision Resilience">
+          <ResilienceDashboard
+            report={result.resilience}
+            decisionModel={result.decision_model}
+            recommendation={result.recommendation}
+            scenarioSet={result.scenarios}
+            decisionTitle={result.decision_model?.decision?.summary || result.question}
+          />
+        </section>
+      )}
+
+      {/* 2h. Stage 6: Resilience Unavailable Banner */}
+      {isResilienceUnavailable && (
+        <section aria-label="Resilience Evaluation Notice">
+          <ResilienceUnavailableBanner
+            resilienceError={result.resilience_error}
+          />
+        </section>
+      )}
+
+      {/* 2i. Unexpected Inconsistent Resilience Data Fallback */}
+      {isResilienceInconsistent && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-5 text-xs text-amber-200 space-y-2 print:bg-zinc-50 print:border-zinc-300 print:text-black"
+        >
+          <div className="flex items-center gap-2 font-semibold text-amber-300 print:text-black">
+            <span className="h-2 w-2 rounded-full bg-amber-400" />
+            Inconsistent Resilience State Detected
+          </div>
+          <p className="leading-relaxed">
+            The analysis service reported that Stage 6 completed, but the resilience report payload was missing from the response.
+            All upstream decision artifacts from Stages 1–5 remain intact and authoritative.
+          </p>
+        </div>
+      )}
+
+      {/* 2g. Historical Analysis Note (Only rendered if user needs clarification, but no error or failure message) */}
       {isHistorical && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 text-xs text-zinc-400 flex items-center justify-between print:hidden">
           <span>
-            Historical Day 4 Analysis: Stages 1–3 Deliberation Report loaded.
+            Historical Analysis: Deliberation Report loaded.
           </span>
           <span className="text-[11px] font-mono text-zinc-500">
             Legacy Mode
