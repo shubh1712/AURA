@@ -11,9 +11,14 @@ import { SimulationHistory } from "./SimulationHistory";
 interface WhatIfDashboardProps {
   analysisId: string;
   ownerId?: string | null;
+  ariaLabel?: string;
 }
 
-export function WhatIfDashboard({ analysisId, ownerId }: WhatIfDashboardProps) {
+export function WhatIfDashboard({
+  analysisId,
+  ownerId,
+  ariaLabel = "What-if Simulation",
+}: WhatIfDashboardProps) {
   const {
     isLoadingDiscovery,
     discoveryError,
@@ -47,7 +52,7 @@ export function WhatIfDashboard({ analysisId, ownerId }: WhatIfDashboardProps) {
   return (
     <section
       id="section-what-if-simulation"
-      aria-label="What-if Simulation"
+      aria-label={ariaLabel}
       className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 sm:p-8 space-y-6 text-zinc-100 shadow-sm print:bg-white print:border-zinc-300 print:text-black"
     >
       {/* 1. Header & Cognitive Framework Disclaimer */}

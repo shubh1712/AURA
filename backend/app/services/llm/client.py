@@ -109,6 +109,11 @@ class LLMConfig(BaseModel):
         ge=0,
         description="Number of retry attempts on transient network or rate-limit failures.",
     )
+    min_retry_headroom_seconds: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Minimum remaining operation and parent budget in seconds required to initiate a retry attempt.",
+    )
     stage: Optional[str] = Field(
         default=None,
         description="Optional pipeline stage name for telemetry and diagnostics.",

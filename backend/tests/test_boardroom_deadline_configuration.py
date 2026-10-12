@@ -107,8 +107,8 @@ def _setup_mock_analysis_service(
 # Tests
 # ------------------------------------------------------------------------------
 
-def test_01_default_requests_retain_60s_boardroom_ceiling():
-    """Default requests without overrides retain the 60.0s operation ceiling for all 4 perspectives."""
+def test_01_default_requests_retain_120s_boardroom_ceiling():
+    """Default requests without overrides retain the 120.0s operation ceiling and 90.0s HTTP timeout for all 4 perspectives."""
     client = ConfigTrackingLLMClient()
     svc = _setup_mock_analysis_service(client, framer_to=None, boardroom_to=None, analysis_to=180.0)
 
@@ -124,11 +124,14 @@ def test_01_default_requests_retain_60s_boardroom_ceiling():
             if config_passed
             else DEFAULT_LLM_CONFIG.operation_timeout_seconds
         )
-        assert effective_ceiling == 60.0
+        assert effective_ceiling == 120.0
+        assert config_passed.timeout_seconds == 90.0
+        assert config_passed.max_retries == 1
+        assert config_passed.min_retry_headroom_seconds == 30.0
 
 
 def test_02_opt_in_boardroom_timeout_propagates_to_all_four_perspectives():
-    """Opt-in boardroom_operation_timeout_seconds=75.0 applies 75s ceiling and 45s HTTP timeout to all 4 perspectives."""
+    """Opt-in boardroom_operation_timeout_seconds=75.0 applies 75s ceiling and min(90.0, 75.0)=75s HTTP timeout (un-clamped) to all 4 perspectives."""
     client = ConfigTrackingLLMClient()
     svc = _setup_mock_analysis_service(client, framer_to=None, boardroom_to=75.0, analysis_to=180.0)
 
@@ -141,7 +144,8 @@ def test_02_opt_in_boardroom_timeout_propagates_to_all_four_perspectives():
     for _, config_passed in persp_calls:
         assert config_passed is not None
         assert config_passed.operation_timeout_seconds == 75.0
-        assert config_passed.timeout_seconds == 45.0
+        assert config_passed.timeout_seconds == 75.0
+        assert config_passed.max_retries == 1
 
 
 def test_03_framer_and_evidence_remain_isolated():
@@ -306,12 +310,13 @@ def test_10_concurrent_requests_with_different_settings_remain_isolated():
     for _, cfg in persp_a:
         assert cfg is not None
         assert cfg.operation_timeout_seconds == 75.0
-        assert cfg.timeout_seconds == 45.0
+        assert cfg.timeout_seconds == 75.0
 
     persp_b = [c for c in client_b.recorded_configs if c[0] == "CandidatePerspectiveAnalysis"]
     for _, cfg in persp_b:
         effective_b = cfg.operation_timeout_seconds if cfg else DEFAULT_LLM_CONFIG.operation_timeout_seconds
-        assert effective_b == 60.0
+        assert effective_b == 120.0
+        assert cfg.timeout_seconds == 90.0
 
 
 def test_11_no_partial_artifacts_escape_on_timeout():

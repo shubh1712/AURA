@@ -186,8 +186,8 @@ def test_4_evidence_mapping_batches_still_use_60s():
         assert effective_ceiling == 60.0
 
 
-def test_5_all_four_boardroom_perspectives_still_use_60s():
-    """Under framer_operation_timeout_seconds=75.0, Boardroom perspective evaluations still use 60s."""
+def test_5_all_four_boardroom_perspectives_retain_boardroom_default():
+    """Under framer_operation_timeout_seconds=75.0, Boardroom perspective evaluations retain their default ceiling (120s)."""
     client = ConfigTrackingLLMClient()
     svc = _setup_mock_analysis_service(client, framer_to=75.0, analysis_to=180.0)
 
@@ -198,7 +198,7 @@ def test_5_all_four_boardroom_perspectives_still_use_60s():
     assert len(persp_calls) >= 1
     for _, config_passed in persp_calls:
         effective_ceiling = config_passed.operation_timeout_seconds if config_passed else DEFAULT_LLM_CONFIG.operation_timeout_seconds
-        assert effective_ceiling == 60.0
+        assert effective_ceiling == 120.0
 
 
 def test_6_board_synthesis_still_uses_60s():

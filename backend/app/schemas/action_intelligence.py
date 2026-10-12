@@ -208,6 +208,11 @@ class IntelligentActionItem(BaseModel):
         description="Identified data gaps, unknowns, or unverified assumptions impacting this action.",
     )
 
+    @property
+    def id(self) -> str:
+        """Alias for action_id for cross-model consistency."""
+        return self.action_id
+
 
 class IntelligentDecisionGate(BaseModel):
     """A strategic checkpoint requiring verification of specific criteria before proceeding."""
@@ -243,6 +248,16 @@ class IntelligentDecisionGate(BaseModel):
         min_length=5,
         description="Enforced response or rollback procedure if gate criteria are not satisfied.",
     )
+
+    @property
+    def id(self) -> str:
+        """Alias for gate_id for cross-model consistency."""
+        return self.gate_id
+
+    @property
+    def gate_name(self) -> str:
+        """Alias for title for cross-model consistency."""
+        return self.title
     source_references: List[str] = Field(
         default_factory=list,
         description="Authoritative artifact IDs underpinning this gate (e.g. 'cnstr_pilot_cohort').",

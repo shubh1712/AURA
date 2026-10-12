@@ -8,16 +8,21 @@ interface EvidenceOverviewProps {
 }
 
 export function EvidenceOverview({ pkg }: EvidenceOverviewProps) {
-  const totalRequirements = pkg.requirements.length;
-  const fulfilledCount = pkg.requirements.filter((r) => r.status === "fulfilled").length;
-  const contestedCount = pkg.requirements.filter((r) => r.status === "contested").length;
-  const pendingCount = pkg.requirements.filter((r) => r.status === "pending").length;
-  const unsupportedCount = pkg.requirements.filter((r) => r.status === "unsupported").length;
-  const inconclusiveCount = pkg.requirements.filter((r) => r.status === "inconclusive").length;
+  const requirements = pkg?.requirements ?? [];
+  const sources = pkg?.sources ?? [];
+  const items = pkg?.items ?? [];
+  const gaps = pkg?.gaps ?? [];
 
-  const totalSources = pkg.sources.length;
-  const totalFindings = pkg.items.length;
-  const totalGaps = pkg.gaps.length;
+  const totalRequirements = requirements.length;
+  const fulfilledCount = requirements.filter((r) => r.status === "fulfilled").length;
+  const contestedCount = requirements.filter((r) => r.status === "contested").length;
+  const pendingCount = requirements.filter((r) => r.status === "pending").length;
+  const unsupportedCount = requirements.filter((r) => r.status === "unsupported").length;
+  const inconclusiveCount = requirements.filter((r) => r.status === "inconclusive").length;
+
+  const totalSources = sources.length;
+  const totalFindings = items.length;
+  const totalGaps = gaps.length;
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 sm:p-6 space-y-5 text-zinc-100 shadow-sm">

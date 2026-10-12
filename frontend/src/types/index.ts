@@ -21,3 +21,5 @@ export * from "./scenario";
 export * from "./resilience";
 export * from "./simulation";
 export * from "./action";
+export * from "./integrity";
+export * from "./report";

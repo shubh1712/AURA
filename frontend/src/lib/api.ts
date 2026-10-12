@@ -10,6 +10,8 @@ import {
   SimulationListResponse,
   SimulationExplanationResponse,
   ActionPlanResponse,
+  DecisionIntegrityReport,
+  SharedReportModel,
 } from "@/types";
 
 const API_BASE_URL =
@@ -780,6 +782,92 @@ export async function generateActionPlan(
       error
     );
   }
+}
+
+/**
+ * Fetch deterministic Decision Integrity Report:
+ * GET /api/analysis/{analysis_id}/integrity
+ */
+export async function getDecisionIntegrity(
+  analysisId: string,
+  ownerId?: string | null
+): Promise<DecisionIntegrityReport> {
+  const url = `${API_BASE_URL}/api/analysis/${encodeURIComponent(analysisId)}/integrity`;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (ownerId) {
+    headers["X-Owner-Id"] = ownerId;
+  }
+
+  try {
+    const res = await fetch(url, { method: "GET", headers });
+    if (!res.ok) {
+      const { errorMessage, details } = await extractErrorInfo(res);
+      throw new ApiClientError(errorMessage, res.status, details);
+    }
+    return (await res.json()) as DecisionIntegrityReport;
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+    throw new ApiClientError(
+      `Network error: unable to reach AURA engine at ${url}.`,
+      undefined,
+      error
+    );
+  }
+}
+
+/**
+ * Fetch unified Shared Presentation & Report Model:
+ * GET /api/analysis/{analysis_id}/report
+ */
+export async function getSharedReport(
+  analysisId: string,
+  ownerId?: string | null
+): Promise<SharedReportModel> {
+  const url = `${API_BASE_URL}/api/analysis/${encodeURIComponent(analysisId)}/report`;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (ownerId) {
+    headers["X-Owner-Id"] = ownerId;
+  }
+
+  try {
+    const res = await fetch(url, { method: "GET", headers });
+    if (!res.ok) {
+      const { errorMessage, details } = await extractErrorInfo(res);
+      throw new ApiClientError(errorMessage, res.status, details);
+    }
+    return (await res.json()) as SharedReportModel;
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+    throw new ApiClientError(
+      `Network error: unable to reach AURA engine at ${url}.`,
+      undefined,
+      error
+    );
+  }
+}
+
+/**
+ * Construct direct download URL for the Executive Summary PDF:
+ */
+export function getSummaryPdfUrl(analysisId: string, ownerId?: string | null): string {
+  const base = `${API_BASE_URL}/api/analysis/${encodeURIComponent(analysisId)}/report/summary/pdf`;
+  return ownerId ? `${base}?owner_id=${encodeURIComponent(ownerId)}` : base;
+}
+
+/**
+ * Construct direct download URL for the Comprehensive Detailed Audit PDF:
+ */
+export function getDetailedPdfUrl(analysisId: string, ownerId?: string | null): string {
+  const base = `${API_BASE_URL}/api/analysis/${encodeURIComponent(analysisId)}/report/detailed/pdf`;
+  return ownerId ? `${base}?owner_id=${encodeURIComponent(ownerId)}` : base;
 }
 
 

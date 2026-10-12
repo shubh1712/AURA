@@ -38,8 +38,12 @@ export default function AuraPage() {
       {/* Top Navigation */}
       <Header />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
+      {/* Main Workspace Area (Fluid responsive container: 92-96% width on large screens up to 1536px) */}
+      <main
+        className={`flex-1 w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8 transition-all duration-300 ${
+          apiResponse ? "max-w-[1536px]" : "max-w-5xl"
+        }`}
+      >
         {/* 1 & 2: AURA Logo/Name & Short Description */}
         <DecisionHero />
 

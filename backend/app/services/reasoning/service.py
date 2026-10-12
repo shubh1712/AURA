@@ -13,8 +13,13 @@ Coordinates the full AI Boardroom deliberation pipeline:
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.decision_model import DecisionModel
 from app.schemas.evidence import EvidencePackage
@@ -220,18 +225,35 @@ class ReasoningService:
         clock: Optional[Callable[[], datetime]] = None,
         perspective_config: Optional[LLMConfig] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
+        boardroom_http_timeout_seconds: Optional[float] = None,
+        boardroom_min_retry_headroom_seconds: Optional[float] = None,
     ) -> "ReasoningService":
         """Factory creating ReasoningService with shared injected LLMClient across all sub-services."""
         cfg = perspective_config
         if cfg is None and boardroom_operation_timeout_seconds is not None:
+            http_to = (
+                boardroom_http_timeout_seconds
+                if boardroom_http_timeout_seconds is not None
+                else getattr(settings, "AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS", 90.0)
+            )
+            min_headroom = (
+                boardroom_min_retry_headroom_seconds
+                if boardroom_min_retry_headroom_seconds is not None
+                else getattr(settings, "AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS", 30.0)
+            )
             cfg = LLMConfig(
                 operation_timeout_seconds=boardroom_operation_timeout_seconds,
-                timeout_seconds=min(45.0, boardroom_operation_timeout_seconds),
+                timeout_seconds=min(http_to, boardroom_operation_timeout_seconds),
+                max_retries=1,
+                min_retry_headroom_seconds=min_headroom,
+                stage="stage3_ai_boardroom_perspectives",
             )
         reasoner = PerspectiveReasoner(llm_client=llm_client, config=cfg)
         orchestrator = PerspectiveOrchestrator(reasoner=reasoner, max_workers=max_workers)
         synthesizer = BoardSynthesizer(llm_client=llm_client)
-        return cls(orchestrator=orchestrator, synthesizer=synthesizer, clock=clock, perspective_config=cfg)
+        svc = cls(orchestrator=orchestrator, synthesizer=synthesizer, clock=clock, perspective_config=cfg)
+        svc.last_timing_metrics: Dict[str, float] = {}
+        return svc
 
     def build_reasoning_board(
         self,
@@ -240,6 +262,8 @@ class ReasoningService:
         deadline_monotonic: Optional[float] = None,
         perspective_config: Optional[LLMConfig] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
+        boardroom_http_timeout_seconds: Optional[float] = None,
+        boardroom_min_retry_headroom_seconds: Optional[float] = None,
     ) -> ReasoningBoard:
         """Executes full boardroom deliberation and produces an authoritative ReasoningBoard.
 
@@ -255,6 +279,10 @@ class ReasoningService:
             decision_model: Authoritative decision problem context.
             evidence_package: Authoritative empirical evidence portfolio.
             deadline_monotonic: Single authoritative parent monotonic deadline.
+            perspective_config: Optional explicit LLMConfig for perspectives.
+            boardroom_operation_timeout_seconds: Optional boardroom operation ceiling.
+            boardroom_http_timeout_seconds: Optional per-request HTTP timeout override.
+            boardroom_min_retry_headroom_seconds: Optional minimum retry headroom override.
 
         Returns:
             ReasoningBoard: Authoritative, fully grounded boardroom artifact.
@@ -263,6 +291,8 @@ class ReasoningService:
             ReasoningServiceError: If any stage fails or times out.
             ReasoningValidationError: If upstream input or downstream output validation fails.
         """
+        t_board_start = time.monotonic()
+
         # Stage 1: Deadline pre-check & upstream validation
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             timeout_err = LLMTimeoutError("Reasoning evaluation deadline expired prior to execution.")
@@ -282,11 +312,25 @@ class ReasoningService:
         # Stage 2: Bounded perspective evaluation
         effective_persp_config = perspective_config or self.perspective_config
         if effective_persp_config is None and boardroom_operation_timeout_seconds is not None:
+            http_to = (
+                boardroom_http_timeout_seconds
+                if boardroom_http_timeout_seconds is not None
+                else getattr(settings, "AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS", 90.0)
+            )
+            min_headroom = (
+                boardroom_min_retry_headroom_seconds
+                if boardroom_min_retry_headroom_seconds is not None
+                else getattr(settings, "AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS", 30.0)
+            )
             effective_persp_config = LLMConfig(
                 operation_timeout_seconds=boardroom_operation_timeout_seconds,
-                timeout_seconds=min(45.0, boardroom_operation_timeout_seconds),
+                timeout_seconds=min(http_to, boardroom_operation_timeout_seconds),
+                max_retries=1,
+                min_retry_headroom_seconds=min_headroom,
+                stage="stage3_ai_boardroom_perspectives",
             )
 
+        t_persp_start = time.monotonic()
         try:
             try:
                 perspectives = self.orchestrator.evaluate_all(
@@ -309,6 +353,7 @@ class ReasoningService:
                 "Reasoning perspective stage failed.",
                 stage="perspectives",
             ) from exc
+        persp_duration = time.monotonic() - t_persp_start
 
         # Stage 3: Monotonic deadline check before disagreement detection
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
@@ -321,6 +366,7 @@ class ReasoningService:
             ) from timeout_err
 
         # Deterministic disagreement detection (pure Python)
+        t_dis_start = time.monotonic()
         try:
             disagreements = detect_disagreements(perspectives)
         except Exception as exc:
@@ -328,6 +374,7 @@ class ReasoningService:
                 "Reasoning disagreement stage failed.",
                 stage="disagreements",
             ) from exc
+        dis_duration = time.monotonic() - t_dis_start
 
         # Stage 4: Monotonic deadline check before synthesis
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
@@ -343,6 +390,7 @@ class ReasoningService:
         # Note: PerspectiveOrchestrator builds its context internally; building here is pure Python and non-networked.
         reasoning_context = build_reasoning_context(decision_model, evidence_package)
 
+        t_synth_start = time.monotonic()
         try:
             synthesis = self.synthesizer.synthesize(
                 decision_model=decision_model,
@@ -357,6 +405,7 @@ class ReasoningService:
                 "Reasoning synthesis stage failed.",
                 stage="synthesis",
             ) from exc
+        synth_duration = time.monotonic() - t_synth_start
 
         # Stage 5: Deterministic ReasoningBoard assembly
         board_id = generate_deterministic_board_id(
@@ -391,5 +440,21 @@ class ReasoningService:
                 "Reasoning board validation failed.",
                 stage="board_validation",
             ) from exc
+
+        total_board_duration = time.monotonic() - t_board_start
+        self.last_timing_metrics = {
+            "perspectives_duration_seconds": persp_duration,
+            "disagreements_duration_seconds": dis_duration,
+            "synthesis_duration_seconds": synth_duration,
+            "total_board_duration_seconds": total_board_duration,
+        }
+        logger.info(
+            "AURA Boardroom Deliberation Timing [%s]: perspectives=%.3fs, disagreements=%.3fs, synthesis=%.3fs, total=%.3fs",
+            board_id,
+            persp_duration,
+            dis_duration,
+            synth_duration,
+            total_board_duration,
+        )
 
         return board

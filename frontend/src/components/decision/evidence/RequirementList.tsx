@@ -12,32 +12,37 @@ interface RequirementListProps {
 export function RequirementList({ pkg }: RequirementListProps) {
   // 1. Build deterministic O(1) lookup maps
   const { requirementEvidenceMap, entityLevelLinks } = useMemo(() => {
-    const sourcesMap = new Map(pkg.sources.map((s) => [s.id, s]));
-    const itemsMap = new Map(pkg.items.map((i) => [i.id, i]));
+    const sources = pkg?.sources ?? [];
+    const items = pkg?.items ?? [];
+    const requirements = pkg?.requirements ?? [];
+    const claimLinks = pkg?.claim_links ?? [];
+
+    const sourcesMap = new Map(sources.map((s) => [s.id, s]));
+    const itemsMap = new Map(items.map((i) => [i.id, i]));
 
     // Map requirement_id -> array of { link, item, source }
     const reqMap = new Map<
       string,
       Array<{
-        link: typeof pkg.claim_links[0];
-        item?: typeof pkg.items[0];
-        source?: typeof pkg.sources[0];
+        link: typeof claimLinks[0];
+        item?: typeof items[0];
+        source?: typeof sources[0];
       }>
     >();
 
     // Initialize map for all requirements
-    for (const req of pkg.requirements) {
+    for (const req of requirements) {
       reqMap.set(req.id, []);
     }
 
     // Separate links: strictly join on requirement_id when present
     const unassignedLinks: Array<{
-      link: typeof pkg.claim_links[0];
-      item?: typeof pkg.items[0];
-      source?: typeof pkg.sources[0];
+      link: typeof claimLinks[0];
+      item?: typeof items[0];
+      source?: typeof sources[0];
     }> = [];
 
-    for (const link of pkg.claim_links) {
+    for (const link of claimLinks) {
       const item = itemsMap.get(link.evidence_item_id);
       const source = item ? sourcesMap.get(item.source_id) : undefined;
       const joinedObj = { link, item, source };

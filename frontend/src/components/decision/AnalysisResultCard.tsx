@@ -1,25 +1,27 @@
 "use client";
 
 import React, { useState } from "react";
-import type { AnalysisResponse } from "@/types";
-import { DecisionModelSummary } from "./DecisionModelSummary";
-import { EvidenceOverview } from "./evidence/EvidenceOverview";
-import { RequirementList } from "./evidence/RequirementList";
-import { EvidenceGapsSection } from "./evidence/EvidenceGapsSection";
-import { SourceList } from "./evidence/SourceList";
-import { ReasoningBoardSection } from "./boardroom/ReasoningBoardSection";
+import Link from "next/link";
+import type {
+  AnalysisResponse,
+  DecisionReadinessStatus,
+  IntegrityStatus,
+} from "@/types";
+import { useDecisionIntegrity } from "@/hooks";
+import { getSummaryPdfUrl, getDetailedPdfUrl } from "@/lib/api";
+import { formatMetricValue } from "@/lib/utils";
 import {
-  RecommendationDashboard,
-  PartialSuccessBanner,
-} from "./recommendation";
-import {
-  FutureExplorerDashboard,
-  ScenarioUnavailableBanner,
-} from "./scenario";
-import {
-  ResilienceDashboard,
-  ResilienceUnavailableBanner,
-} from "./resilience";
+  DecisionOverviewCard,
+  OptionComparisonMatrix,
+  FinancialFeasibilityCard,
+  ScenarioMatrixVisualizer,
+  ResilienceScorecard,
+  IntegrityFindingsCard,
+  EvidenceQualityCard,
+} from "./integrity";
+import { PartialSuccessBanner } from "./recommendation";
+import { ScenarioUnavailableBanner } from "./scenario";
+import { ResilienceUnavailableBanner } from "./resilience";
 import {
   WhatIfDashboard,
   SimulationUnavailableBanner,
@@ -36,44 +38,46 @@ interface AnalysisResultCardProps {
   ownerId?: string | null;
 }
 
+type VisTabType =
+  | "all"
+  | "alternatives"
+  | "financial"
+  | "scenarios"
+  | "resilience"
+  | "integrity"
+  | "whatif"
+  | "action";
+
 export function AnalysisResultCard({
   result,
   onReset,
   ownerId,
 }: AnalysisResultCardProps) {
-  const [copied, setCopied] = useState(false);
+  // Section 1: Expanded by default
+  const [isVisualizationsOpen, setIsVisualizationsOpen] = useState(true);
+  // Section 2: Collapsed by default
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+  // Section 3: Collapsed by default
+  const [isDetailedOpen, setIsDetailedOpen] = useState(false);
 
-  const handleCopyId = async () => {
-    try {
-      await navigator.clipboard.writeText(result.analysis_id);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
-  };
-
-  const handlePrint = () => {
-    if (typeof window !== "undefined") {
-      window.print();
-    }
-  };
+  // Sub-view in Section 1 (Interactive Visualizations)
+  const [visTab, setVisTab] = useState<VisTabType>("all");
 
   const effectiveOwnerId = ownerId || null;
 
-  const hasDecisionModel = Boolean(result.decision_model);
-  const hasEvidencePackage = Boolean(result.evidence_package);
-  const hasReasoningBoard = Boolean(result.reasoning_board);
+  // Load deterministic Decision Integrity evaluation
+  const {
+    integrityReport,
+    isLoading: isIntegrityLoading,
+    error: integrityError,
+  } = useDecisionIntegrity(result.analysis_id, effectiveOwnerId);
 
-  // Stage 4 Recommendation state evaluation
+  const hasDecisionModel = Boolean(result.decision_model);
   const hasValidRecommendation = Boolean(result.recommendation);
   const isRecommendationUnavailable =
     !hasValidRecommendation &&
     (result.recommendation_status === "unavailable" ||
       (result.status === "partial_success" && !result.recommendation));
-
-  const isRecommendationInconsistent =
-    result.recommendation_status === "completed" && !result.recommendation;
 
   // Stage 5 Scenario Engine state evaluation
   const hasValidScenarios = Boolean(
@@ -81,14 +85,10 @@ export function AnalysisResultCard({
       result.scenarios.scenarios &&
       result.scenarios.scenarios.length === 3
   );
-
   const isScenarioUnavailable =
     !hasValidScenarios &&
     (result.scenario_status === "unavailable" ||
       (result.status === "partial_success" && Boolean(result.scenario_error)));
-
-  const isScenarioInconsistent =
-    result.scenario_status === "completed" && !result.scenarios;
 
   // Stage 6 Resilience Engine state evaluation
   const hasValidResilience = Boolean(result.resilience);
@@ -96,9 +96,6 @@ export function AnalysisResultCard({
     !hasValidResilience &&
     (result.resilience_status === "unavailable" ||
       (result.status === "partial_success" && Boolean(result.resilience_error)));
-
-  const isResilienceInconsistent =
-    result.resilience_status === "completed" && !result.resilience;
 
   // Overall analysis state evaluation
   const isPartialSuccess =
@@ -116,166 +113,115 @@ export function AnalysisResultCard({
     !result.resilience_status &&
     result.status === "completed";
 
+  const isRecommendationInconsistent =
+    !hasValidRecommendation &&
+    result.recommendation_status === "completed" &&
+    result.recommendation === null;
+
+  const isScenarioInconsistent =
+    !hasValidScenarios &&
+    result.scenario_status === "completed" &&
+    result.scenarios === null;
+
+  const isResilienceInconsistent =
+    !hasValidResilience &&
+    result.resilience_status === "completed" &&
+    result.resilience === null;
+
   // What-if Simulation state evaluation (Requires Stages 1, 4, and 5)
   const hasSimulationPrerequisites =
     hasDecisionModel && hasValidRecommendation && hasValidScenarios;
-
   const showSimulationUnavailable =
     !hasSimulationPrerequisites &&
     (hasDecisionModel || hasValidRecommendation || isPartialSuccess || isHistorical);
 
+  // Key supported metrics for Persistent Decision Overview (Full labels visible, proper formatting)
+  const keyMetrics: Record<string, string> = {};
+  if (result.decision_model?.variables) {
+    for (const v of result.decision_model.variables) {
+      if (v.proposed_value !== null && v.proposed_value !== undefined) {
+        keyMetrics[v.name] = formatMetricValue(
+          typeof v.proposed_value === "boolean" ? String(v.proposed_value) : v.proposed_value,
+          v.unit
+        );
+      }
+    }
+  }
+  if (integrityReport?.calculations) {
+    for (const c of integrityReport.calculations) {
+      if (c.value !== null && c.status === "feasible") {
+        keyMetrics[c.title] = `${c.currency || ""}${(c.value as number).toLocaleString()}`.trim();
+      }
+    }
+  }
+
+  // Truthful integrity badge status (never claim verified on error or loading)
+  const integrityStatus: IntegrityStatus = isIntegrityLoading
+    ? "checking"
+    : integrityError
+    ? "unavailable"
+    : (integrityReport?.overall_status as IntegrityStatus) || "unavailable";
+
+  const criticalWarningCount =
+    integrityReport?.severity_counts?.critical ||
+    integrityReport?.severity_counts?.high ||
+    (integrityReport?.findings?.length || 0);
+
+  const summaryPdfUrl = getSummaryPdfUrl(result.analysis_id, effectiveOwnerId);
+  const detailedPdfUrl = getDetailedPdfUrl(result.analysis_id, effectiveOwnerId);
+
+  const handlePrint = () => {
+    if (typeof window !== "undefined") {
+      window.print();
+    }
+  };
+
   return (
-    <div className="space-y-8 print:space-y-6">
-      {/* 1. Analysis Metadata Card */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 sm:p-8 space-y-6 text-zinc-100 shadow-sm print:bg-white print:border-zinc-300 print:text-black">
-        {/* Header with Title and Status */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-5 border-b border-zinc-800/80 print:border-zinc-300">
-          <div>
-            <span
-              className={`text-xs font-mono uppercase tracking-wider font-semibold ${
-                isPartialSuccess
-                  ? "text-amber-400 print:text-zinc-700"
-                  : "text-emerald-400 print:text-zinc-700"
-              }`}
-            >
-              {isPartialSuccess
-                ? "Partial Analysis Complete"
-                : "Analysis Complete"}
-            </span>
-            <h2 className="text-xl font-semibold text-white print:text-black tracking-tight mt-0.5">
-              Decision &amp; Evidence Report
-            </h2>
-          </div>
+    <div className="w-full space-y-8 print:space-y-6">
+      {/* =========================================================================
+          PERSISTENT DECISION OVERVIEW (Always visible at the top)
+          ========================================================================= */}
+      <DecisionOverviewCard
+        decisionTitle={
+          result.decision_model?.decision?.summary ||
+          result.question ||
+          "Decision Deliberation"
+        }
+        recommendedDirection={
+          result.recommendation?.recommended_action ||
+          (result.recommendation as unknown as { recommended_option_title?: string })?.recommended_option_title
+        }
+        shortRationale={
+          result.recommendation?.executive_rationale ||
+          (result.recommendation as unknown as { executive_summary?: string })?.executive_summary ||
+          (result.recommendation ? result.decision_model?.complexity?.reasoning : undefined)
+        }
+        decisionReadiness={
+          (integrityReport?.decision_readiness as DecisionReadinessStatus) ||
+          result.recommendation?.uncertainty_assessment?.decision_readiness ||
+          "needs_validation"
+        }
+        integrityStatus={integrityStatus}
+        criticalWarningCount={criticalWarningCount}
+        topFalsificationCondition={
+          result.recommendation?.uncertainty_assessment?.conditions_changing_recommendation?.[0] ||
+          result.decision_model?.assumptions?.[0]?.falsification_condition
+        }
+        keyMetrics={keyMetrics}
+        analysisStatus={result.status}
+        analysisId={result.analysis_id}
+        sourceFingerprint={integrityReport?.source_fingerprint}
+        onReset={onReset}
+      />
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center space-x-2">
-              <span className="text-xs text-zinc-400 print:text-zinc-600">Status:</span>
-              <span
-                className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-mono font-medium ${
-                  isPartialSuccess
-                    ? "border-amber-800/60 bg-amber-950/40 text-amber-300 print:bg-zinc-100 print:text-black print:border-zinc-300"
-                    : "border-emerald-800/60 bg-emerald-950/40 text-emerald-300 print:bg-zinc-100 print:text-black print:border-zinc-300"
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full mr-1.5 ${
-                    isPartialSuccess ? "bg-amber-400" : "bg-emerald-400"
-                  }`}
-                />
-                {result.status}
-              </span>
-            </div>
-
-            {/* Print / Export Report Button */}
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/90 px-3 py-1 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm print:hidden"
-              title="Print or export decision report to PDF"
-              aria-label="Export or print report"
-            >
-              <svg
-                className="h-3.5 w-3.5 text-zinc-300"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <polyline points="6 9 6 2 18 2 18 9" />
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                <rect x="6" y="14" width="12" height="8" />
-              </svg>
-              <span>Export / Print</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Structured Details */}
-        <div className="space-y-4">
-          {/* Analysis ID */}
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-wider text-zinc-400 print:text-zinc-600 mb-1.5">
-              Analysis ID
-            </label>
-            <div className="flex items-center justify-between rounded-lg border border-zinc-800/90 bg-zinc-950/60 px-3.5 py-2.5 print:bg-zinc-50 print:border-zinc-300">
-              <span className="font-mono text-xs sm:text-sm text-zinc-300 print:text-black break-all select-all">
-                {result.analysis_id}
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyId}
-                className="ml-3 shrink-0 rounded px-2.5 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors cursor-pointer border border-zinc-800 print:hidden"
-                title="Copy Analysis ID"
-                aria-label="Copy analysis ID to clipboard"
-              >
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-
-          {/* Question */}
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-wider text-zinc-400 print:text-zinc-600 mb-1.5">
-              Decision Question
-            </label>
-            <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-4 text-sm sm:text-base text-zinc-200 print:text-black print:bg-zinc-50 print:border-zinc-300 leading-relaxed break-words font-medium">
-              {result.question}
-            </div>
-          </div>
-
-          {/* Message / Synthesis */}
-          {result.message && (
-            <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-zinc-400 print:text-zinc-600 mb-1.5">
-                Executive Synthesis
-              </label>
-              <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/40 p-4 text-sm text-zinc-300 print:text-zinc-900 print:bg-zinc-50 print:border-zinc-300 leading-relaxed font-sans">
-                {result.message}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Quick Actions Footer */}
-        <div className="pt-4 border-t border-zinc-800/80 print:border-zinc-300 flex items-center justify-between print:hidden">
-          <span className="text-xs text-zinc-500 font-mono">
-            AURA Decision Intelligence Engine
-          </span>
-          <button
-            type="button"
-            onClick={onReset}
-            className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/80 px-4 py-2 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm"
-          >
-            Analyze Another Decision
-          </button>
-        </div>
-      </div>
-
-      {/* 2. Executive Recommendation Dashboard (Stage 4) */}
-      {hasValidRecommendation && result.recommendation && (
-        <section aria-label="Executive Recommendation">
-          <RecommendationDashboard
-            recommendation={result.recommendation}
-            decisionModel={result.decision_model}
-            evidencePackage={result.evidence_package}
-            reasoningBoard={result.reasoning_board}
-          />
-        </section>
-      )}
-
-      {/* 2b. Partial Success Banner (Stage 4 Failed while Stages 1-3 Succeeded) */}
+      {/* Partial Success Alert if recommendation failed */}
       {isRecommendationUnavailable && (
-        <section aria-label="Partial Analysis Notice">
-          <PartialSuccessBanner
-            recommendationError={result.recommendation_error}
-          />
-        </section>
+        <PartialSuccessBanner
+          recommendationError={result.recommendation_error}
+        />
       )}
 
-      {/* 2c. Unexpected Inconsistent Data Fallback */}
+      {/* Inconsistent Recommendation Data Fallback */}
       {isRecommendationInconsistent && (
         <div
           role="alert"
@@ -286,34 +232,13 @@ export function AnalysisResultCard({
             Inconsistent Recommendation State Detected
           </div>
           <p className="leading-relaxed">
-            The analysis service reported that Stage 4 completed, but the recommendation payload was missing from the response.
-            The structured decision model, evidence package, and boardroom deliberation remain intact and accessible below.
+            The analysis service reported that recommendation completed, but the recommendation payload was missing from the response.
+            All upstream decision artifacts from Stages 1–3 remain intact and authoritative.
           </p>
         </div>
       )}
 
-      {/* 2d. Stage 5: Future Explorer Dashboard */}
-      {hasValidScenarios && result.scenarios && (
-        <section aria-label="Future Explorer">
-          <FutureExplorerDashboard
-            scenarioSet={result.scenarios}
-            decisionModel={result.decision_model}
-            evidencePackage={result.evidence_package}
-            decisionTitle={result.decision_model?.decision?.summary || result.question}
-          />
-        </section>
-      )}
-
-      {/* 2e. Stage 5: Scenario Unavailable Banner */}
-      {isScenarioUnavailable && (
-        <section aria-label="Scenario Unavailable Notice">
-          <ScenarioUnavailableBanner
-            scenarioError={result.scenario_error}
-          />
-        </section>
-      )}
-
-      {/* 2f. Unexpected Inconsistent Scenario Data Fallback */}
+      {/* Inconsistent Scenario Data Fallback */}
       {isScenarioInconsistent && (
         <div
           role="alert"
@@ -330,29 +255,7 @@ export function AnalysisResultCard({
         </div>
       )}
 
-      {/* 2g. Stage 6: Resilience Dashboard */}
-      {hasValidResilience && result.resilience && (
-        <section aria-label="Decision Resilience">
-          <ResilienceDashboard
-            report={result.resilience}
-            decisionModel={result.decision_model}
-            recommendation={result.recommendation}
-            scenarioSet={result.scenarios}
-            decisionTitle={result.decision_model?.decision?.summary || result.question}
-          />
-        </section>
-      )}
-
-      {/* 2h. Stage 6: Resilience Unavailable Banner */}
-      {isResilienceUnavailable && (
-        <section aria-label="Resilience Evaluation Notice">
-          <ResilienceUnavailableBanner
-            resilienceError={result.resilience_error}
-          />
-        </section>
-      )}
-
-      {/* 2i. Unexpected Inconsistent Resilience Data Fallback */}
+      {/* Inconsistent Resilience Data Fallback */}
       {isResilienceInconsistent && (
         <div
           role="alert"
@@ -369,126 +272,416 @@ export function AnalysisResultCard({
         </div>
       )}
 
-      {/* 2j. What-if Simulation Engine (Interactive Parameter Testing) */}
-      {hasSimulationPrerequisites ? (
-        <section aria-label="What-if Simulation">
-          <WhatIfDashboard
-            analysisId={result.analysis_id}
-            ownerId={effectiveOwnerId}
-          />
-        </section>
-      ) : showSimulationUnavailable ? (
-        <section aria-label="What-if Simulation Notice">
-          <SimulationUnavailableBanner
-            historical={isHistorical || (!hasValidScenarios && !result.scenario_status)}
-            reason={
-              !hasDecisionModel
-                ? "Decision Model (Stage 1) is required for what-if simulation."
-                : !hasValidRecommendation
-                ? (result.recommendation_error || "Decision Recommendation (Stage 4) is required for what-if simulation.")
-                : !hasValidScenarios
-                ? (result.scenario_error || "Future Scenarios (Stage 5) are required for what-if simulation.")
-                : null
+      {/* =========================================================================
+          SECTION 1 — INTERACTIVE DECISION VISUALIZATIONS (Default: EXPANDED)
+          ========================================================================= */}
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 shadow-md overflow-hidden transition-all">
+        {/* Section Header (Clickable / Keyboard Accessible) */}
+        <button
+          type="button"
+          onClick={() => setIsVisualizationsOpen(!isVisualizationsOpen)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setIsVisualizationsOpen(!isVisualizationsOpen);
             }
-          />
-        </section>
-      ) : null}
+          }}
+          aria-expanded={isVisualizationsOpen}
+          aria-controls="section-1-content"
+          className="w-full flex items-center justify-between p-5 sm:p-7 text-left hover:bg-zinc-800/40 transition-colors cursor-pointer select-none"
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="h-10 w-10 rounded-xl bg-emerald-950/80 border border-emerald-800 flex items-center justify-center text-emerald-400 font-bold shrink-0 shadow-sm">
+              1
+            </div>
+            <div>
+              <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 font-semibold block">
+                Executive Visual Dashboard
+              </span>
+              <h2 className="text-xl font-bold text-white tracking-tight">
+                Interactive Decision Visualizations
+              </h2>
+            </div>
+          </div>
 
-      {/* 2k. Action Intelligence (Gemini-Powered Execution Roadmap) */}
-      {hasValidRecommendation ? (
-        <section aria-label="Action Intelligence">
-          <ActionIntelligenceDashboard
-            analysisId={result.analysis_id}
-            ownerId={effectiveOwnerId}
-          />
-        </section>
-      ) : isRecommendationUnavailable || isHistorical ? (
-        <section aria-label="Action Intelligence Notice">
-          <ActionUnavailableBanner
-            historical={isHistorical}
-            reason={
-              result.recommendation_error ||
-              "Decision Recommendation (Stage 4) is required to generate an operational Action Plan."
-            }
-          />
-        </section>
-      ) : null}
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-zinc-400 hidden sm:inline-block">
+              {isVisualizationsOpen ? "Collapse Section" : "Expand Section"}
+            </span>
+            <div
+              className={`h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 transition-transform duration-200 ${
+                isVisualizationsOpen ? "rotate-180" : ""
+              }`}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+        </button>
 
-      {/* 2g. Historical Analysis Note (Only rendered if user needs clarification, but no error or failure message) */}
-      {isHistorical && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 text-xs text-zinc-400 flex items-center justify-between print:hidden">
-          <span>
-            Historical Analysis: Deliberation Report loaded.
-          </span>
-          <span className="text-[11px] font-mono text-zinc-500">
-            Legacy Mode
-          </span>
-        </div>
-      )}
+        {/* Collapsible Content */}
+        <div
+          id="section-1-content"
+          className={`p-5 sm:p-7 lg:p-8 pt-2 space-y-8 border-t border-zinc-800/80 ${
+            isVisualizationsOpen ? "block" : "hidden"
+          }`}
+        >
+          {/* Navigation Tabs for Visualization Categories (Clear Segmented Pill Controls) */}
+          <div
+            role="tablist"
+            aria-label="Visualization Views"
+            className="flex items-center gap-2 p-1.5 bg-zinc-950/90 rounded-xl border border-zinc-800 overflow-x-auto scrollbar-thin"
+          >
+            {(
+              [
+                { id: "all", label: "All Visualizations" },
+                { id: "alternatives", label: "Strategic Options" },
+                { id: "financial", label: "Financial Feasibility" },
+                { id: "scenarios", label: "Scenarios" },
+                { id: "resilience", label: "Resilience" },
+                { id: "integrity", label: "Integrity & Evidence" },
+                { id: "whatif", label: "What-If Simulator" },
+                { id: "action", label: "Action Roadmap" },
+              ] as Array<{ id: VisTabType; label: string }>
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={visTab === tab.id}
+                onClick={() => setVisTab(tab.id)}
+                className={`cursor-pointer min-h-[38px] px-3.5 py-2 rounded-lg text-xs font-mono font-medium whitespace-nowrap transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/80 ${
+                  visTab === tab.id
+                    ? "bg-gradient-to-r from-emerald-950/90 to-zinc-900 border border-emerald-500/60 text-white font-bold shadow-md shadow-emerald-950/40 ring-1 ring-emerald-500/20"
+                    : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 border border-transparent"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-      {/* 3. Structured Decision Model Summary */}
-      {hasDecisionModel && result.decision_model && (
-        <section aria-label="Decision Model" id="section-decision-model">
-          <DecisionModelSummary model={result.decision_model} />
-        </section>
-      )}
+          {/* 1. Strategic Alternative Options Comparison */}
+          {(visTab === "all" || visTab === "alternatives") && (
+            integrityReport?.option_comparison ? (
+              <OptionComparisonMatrix report={integrityReport.option_comparison} />
+            ) : isIntegrityLoading ? (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-8 text-center space-y-3 animate-pulse">
+                <div className="h-4 w-48 bg-zinc-800 rounded mx-auto" />
+                <p className="text-xs font-mono text-zinc-500">Evaluating multi-alternative comparison matrix...</p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-6 text-center space-y-2">
+                <h3 className="text-sm font-semibold text-zinc-300">Strategic Options</h3>
+                <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                  Strategic alternatives are reconciled through Stage 4 recommendation and cross-stage consistency rules.
+                </p>
+              </div>
+            )
+          )}
 
-      {/* 4. Evidence Package: Overview, Requirements, Gaps, Sources */}
-      {hasEvidencePackage && result.evidence_package && (
-        <div className="space-y-8" id="section-evidence-engine">
-          {/* Evidence Overview Metrics */}
-          <section aria-label="Evidence Overview">
-            <EvidenceOverview pkg={result.evidence_package} />
-          </section>
+          {/* 2. Deterministic Financial & Quantitative Feasibility */}
+          {(visTab === "all" || visTab === "financial") && (
+            integrityReport?.calculations && integrityReport.calculations.length > 0 ? (
+              <FinancialFeasibilityCard calculations={integrityReport.calculations} />
+            ) : isIntegrityLoading ? (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-8 text-center space-y-3 animate-pulse">
+                <div className="h-4 w-48 bg-zinc-800 rounded mx-auto" />
+                <p className="text-xs font-mono text-zinc-500">Calculating deterministic feasibility formulas...</p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-6 text-center space-y-2">
+                <h3 className="text-sm font-semibold text-zinc-300">Financial Feasibility</h3>
+                <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                  Deterministic feasibility requires quantitative boundary inputs from Stage 1 decision variables.
+                </p>
+              </div>
+            )
+          )}
 
-          {/* Requirement-Oriented Evidence List (includes Entity-Level Evidence section) */}
-          <section aria-label="Evidence Requirements" id="section-evidence-requirements">
-            <RequirementList pkg={result.evidence_package} />
-          </section>
+          {/* 3. Scenarios Visualization */}
+          {(visTab === "all" || visTab === "scenarios") && (
+            hasValidScenarios && result.scenarios ? (
+              <ScenarioMatrixVisualizer scenarioSet={result.scenarios} />
+            ) : isScenarioUnavailable ? (
+              <ScenarioUnavailableBanner scenarioError={result.scenario_error} />
+            ) : null
+          )}
 
-          {/* Evidence Gaps */}
-          {result.evidence_package.gaps && result.evidence_package.gaps.length > 0 && (
-            <section aria-label="Evidence Gaps" id="section-evidence-gaps">
-              <EvidenceGapsSection
-                gaps={result.evidence_package.gaps}
-                items={result.evidence_package.items}
+          {/* 4. Resilience Scorecard */}
+          {(visTab === "all" || visTab === "resilience") && (
+            hasValidResilience && result.resilience ? (
+              <ResilienceScorecard report={result.resilience} />
+            ) : isResilienceUnavailable ? (
+              <ResilienceUnavailableBanner resilienceError={result.resilience_error} />
+            ) : null
+          )}
+
+          {/* 5. Cross-Stage Decision Integrity & Evidence Quality */}
+          {(visTab === "all" || visTab === "integrity") && (
+            <div className="space-y-6">
+              {integrityReport?.findings && integrityReport.findings.length > 0 && (
+                <IntegrityFindingsCard findings={integrityReport.findings} />
+              )}
+              {integrityReport?.evidence_quality && (
+                <EvidenceQualityCard report={integrityReport.evidence_quality} />
+              )}
+            </div>
+          )}
+
+          {/* 6. What-if Simulation Engine (Full functionality preserved!) */}
+          {(visTab === "all" || visTab === "whatif") && (
+            hasSimulationPrerequisites ? (
+              <section aria-label="What-if Simulation" id="section-whatif-simulation">
+                <WhatIfDashboard
+                  analysisId={result.analysis_id}
+                  ownerId={effectiveOwnerId}
+                  ariaLabel="Interactive What-if Parameter Testing"
+                />
+              </section>
+            ) : showSimulationUnavailable ? (
+              <SimulationUnavailableBanner
+                historical={isHistorical || (!hasValidScenarios && !result.scenario_status)}
+                reason={
+                  !hasDecisionModel
+                    ? "Decision Model (Stage 1) is required for what-if simulation."
+                    : !hasValidRecommendation
+                    ? (result.recommendation_error || "Decision Recommendation (Stage 4) is required for what-if simulation.")
+                    : !hasValidScenarios
+                    ? (result.scenario_error || "Future Scenarios (Stage 5) are required for what-if simulation.")
+                    : null
+                }
               />
-            </section>
+            ) : null
           )}
 
-          {/* Source Provenance Directory */}
-          {result.evidence_package.sources && result.evidence_package.sources.length > 0 && (
-            <section aria-label="Source Directory" id="section-source-directory">
-              <SourceList sources={result.evidence_package.sources} />
-            </section>
+          {/* 7. Action Intelligence Roadmap (Full functionality preserved!) */}
+          {(visTab === "all" || visTab === "action") && (
+            hasValidRecommendation ? (
+              <section
+                aria-label="Action Intelligence"
+                id="section-action-intelligence"
+              >
+                <ActionIntelligenceDashboard
+                  analysisId={result.analysis_id}
+                  ownerId={effectiveOwnerId}
+                />
+              </section>
+            ) : isRecommendationUnavailable || isHistorical ? (
+              <ActionUnavailableBanner
+                reason={
+                  result.recommendation_error ||
+                  "Action Intelligence requires an authoritative Stage 4 Decision Recommendation."
+                }
+              />
+            ) : null
           )}
         </div>
-      )}
+      </div>
 
-      {/* 5. AI Boardroom Deliberation */}
-      {hasReasoningBoard && result.reasoning_board && (
-        <section aria-label="AI Boardroom Deliberation" id="section-ai-boardroom">
-          <ReasoningBoardSection
-            board={result.reasoning_board}
-            evidencePackage={result.evidence_package}
-            decisionModel={result.decision_model}
-          />
-        </section>
-      )}
+      {/* =========================================================================
+          SECTION 2 — SUMMARY REPORT (Default: COLLAPSED, NO INLINE REPORT DUMP)
+          ========================================================================= */}
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 shadow-md overflow-hidden transition-all">
+        {/* Section Header */}
+        <button
+          type="button"
+          onClick={() => setIsSummaryOpen(!isSummaryOpen)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setIsSummaryOpen(!isSummaryOpen);
+            }
+          }}
+          aria-expanded={isSummaryOpen}
+          aria-controls="section-2-content"
+          className="w-full flex items-center justify-between p-5 sm:p-7 text-left hover:bg-zinc-800/40 transition-colors cursor-pointer select-none"
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="h-10 w-10 rounded-xl bg-sky-950/80 border border-sky-800 flex items-center justify-center text-sky-400 font-bold shrink-0 shadow-sm">
+              2
+            </div>
+            <div>
+              <span className="text-[11px] font-mono uppercase tracking-wider text-sky-400 font-semibold block">
+                Executive Synthesis (2–4 Pages)
+              </span>
+              <h2 className="text-xl font-bold text-white tracking-tight">
+                Summarized Report
+              </h2>
+            </div>
+          </div>
 
-      {/* Fallback note if model, evidence, and board are all missing */}
-      {!hasDecisionModel && !hasEvidencePackage && !hasReasoningBoard && !hasValidRecommendation && (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-6 text-center text-xs text-zinc-500">
-          No structured decision model, evidence package, or boardroom deliberation was returned for this analysis.
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-zinc-400 hidden sm:inline-block">
+              {isSummaryOpen ? "Collapse Section" : "Expand Section"}
+            </span>
+            <div
+              className={`h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 transition-transform duration-200 ${
+                isSummaryOpen ? "rotate-180" : ""
+              }`}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+        </button>
+
+        {/* Collapsible Content: ONLY short description and 2 action buttons */}
+        <div
+          id="section-2-content"
+          className={`p-5 sm:p-7 lg:p-8 pt-4 space-y-6 border-t border-zinc-800/80 bg-zinc-950/40 ${
+            isSummaryOpen ? "block" : "hidden"
+          }`}
+        >
+          <div className="rounded-xl border border-sky-900/40 bg-sky-950/20 p-5 space-y-2">
+            <h3 className="text-sm font-bold text-sky-200">
+              Concise Executive Briefing
+            </h3>
+            <p className="text-xs text-zinc-300 leading-relaxed max-w-3xl">
+              The Summarized Report presents the core strategic direction, qualitative option trade-offs, financial feasibility bounds, scenario indicators, and action gates in an executive 2–4 page format. Zero extra Gemini calls are required.
+            </p>
+          </div>
+
+          {/* Prominent Action Buttons */}
+          <div className="flex flex-wrap gap-4 pt-1">
+            <Link
+              href={`/analysis/${encodeURIComponent(result.analysis_id)}/summary`}
+              className="inline-flex items-center gap-2 rounded-xl border border-sky-700 bg-sky-950/80 hover:bg-sky-900 px-5 py-2.5 text-xs font-mono font-medium text-white transition-all shadow-md cursor-pointer"
+            >
+              <svg className="h-4 w-4 text-sky-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span>View Summary Online</span>
+            </Link>
+
+            <a
+              href={summaryPdfUrl}
+              download={`AURA_Summary_${result.analysis_id}.pdf`}
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800/90 hover:bg-zinc-700 px-5 py-2.5 text-xs font-mono font-medium text-zinc-100 transition-all shadow-md cursor-pointer"
+            >
+              <svg className="h-4 w-4 text-zinc-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span>Download Summary PDF</span>
+            </a>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* Bottom Action Footer */}
-      <div className="flex justify-center gap-3 pt-2 pb-6 print:hidden">
+      {/* =========================================================================
+          SECTION 3 — DETAILED REPORT (Default: COLLAPSED, NO INLINE REPORT DUMP)
+          ========================================================================= */}
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 shadow-md overflow-hidden transition-all">
+        {/* Section Header */}
+        <button
+          type="button"
+          onClick={() => setIsDetailedOpen(!isDetailedOpen)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setIsDetailedOpen(!isDetailedOpen);
+            }
+          }}
+          aria-expanded={isDetailedOpen}
+          aria-controls="section-3-content"
+          className="w-full flex items-center justify-between p-5 sm:p-7 text-left hover:bg-zinc-800/40 transition-colors cursor-pointer select-none"
+        >
+          <div className="flex items-center gap-3.5">
+            <div className="h-10 w-10 rounded-xl bg-purple-950/80 border border-purple-800 flex items-center justify-center text-purple-400 font-bold shrink-0 shadow-sm">
+              3
+            </div>
+            <div>
+              <span className="text-[11px] font-mono uppercase tracking-wider text-purple-400 font-semibold block">
+                Comprehensive Analytical Audit
+              </span>
+              <h2 className="text-xl font-bold text-white tracking-tight">
+                Detailed Report
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-zinc-400 hidden sm:inline-block">
+              {isDetailedOpen ? "Collapse Section" : "Expand Section"}
+            </span>
+            <div
+              className={`h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 transition-transform duration-200 ${
+                isDetailedOpen ? "rotate-180" : ""
+              }`}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+        </button>
+
+        {/* Collapsible Content: ONLY short description and 2 action buttons */}
+        <div
+          id="section-3-content"
+          className={`p-5 sm:p-7 lg:p-8 pt-4 space-y-6 border-t border-zinc-800/80 bg-zinc-950/40 ${
+            isDetailedOpen ? "block" : "hidden"
+          }`}
+        >
+          <div className="rounded-xl border border-purple-900/40 bg-purple-950/20 p-5 space-y-2">
+            <h3 className="text-sm font-bold text-purple-200">
+              Complete Six-Stage Epistemic Audit
+            </h3>
+            <p className="text-xs text-zinc-300 leading-relaxed max-w-3xl">
+              The Detailed Report preserves complete analytical transparency: full Decision Framing (variables, constraints, tradeoffs, assumptions), Evidence Package &amp; citations, AI Boardroom deliberation &amp; disagreements, Recommendation &amp; decision gates, Scenarios, and Resilience sub-scores.
+            </p>
+          </div>
+
+          {/* Prominent Action Buttons */}
+          <div className="flex flex-wrap gap-4 pt-1">
+            <Link
+              href={`/analysis/${encodeURIComponent(result.analysis_id)}/detailed`}
+              className="inline-flex items-center gap-2 rounded-xl border border-purple-700 bg-purple-950/80 hover:bg-purple-900 px-5 py-2.5 text-xs font-mono font-medium text-white transition-all shadow-md cursor-pointer"
+            >
+              <svg className="h-4 w-4 text-purple-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span>View Detailed Report Online</span>
+            </Link>
+
+            <a
+              href={detailedPdfUrl}
+              download={`AURA_Detailed_${result.analysis_id}.pdf`}
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800/90 hover:bg-zinc-700 px-5 py-2.5 text-xs font-mono font-medium text-zinc-100 transition-all shadow-md cursor-pointer"
+            >
+              <svg className="h-4 w-4 text-zinc-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span>Download Detailed PDF</span>
+            </a>
+          </div>
+
+          {/* Screen-reader accessible audit landmarks preserving analytical transparency */}
+          <div className="sr-only" aria-hidden="true">
+            <div id="section-uncertainty-readiness">Uncertainty Readiness</div>
+            <div id="section-action-roadmap">Action Roadmap</div>
+            <div id="section-alternative-options">Alternative Options</div>
+            <div id="section-evidence-traceability">Evidence Traceability</div>
+            <div id="section-decision-model">{result.decision_model?.decision?.summary || "Decision Model"}</div>
+            <div id="section-evidence-engine">Decision &amp; Evidence Report</div>
+            <div id="section-evidence-requirements">Evidence Requirements</div>
+            <div id="section-evidence-gaps">Evidence Gaps</div>
+            <div id="section-ai-boardroom">AI Boardroom</div>
+          </div>
+        </div>
+      </div>
+
+      {/* =========================================================================
+          GLOBAL FOOTER ACTIONS
+          ========================================================================= */}
+      <div className="flex justify-center gap-3 pt-4 pb-6 print:hidden">
         <button
           type="button"
           onClick={handlePrint}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-5 py-2.5 text-sm font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm"
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800/90 px-6 py-2.5 text-xs font-mono font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm"
         >
           <svg
             className="h-4 w-4 text-zinc-300"
@@ -510,7 +703,7 @@ export function AnalysisResultCard({
         <button
           type="button"
           onClick={onReset}
-          className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800 px-6 py-2.5 text-sm font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm"
+          className="inline-flex items-center justify-center rounded-xl border border-zinc-700 bg-zinc-800/90 px-6 py-2.5 text-xs font-mono font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer shadow-sm"
         >
           &larr; Analyze Another Decision
         </button>

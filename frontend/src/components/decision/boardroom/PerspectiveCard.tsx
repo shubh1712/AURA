@@ -123,8 +123,12 @@ export function PerspectiveCard({
   decisionModel,
 }: PerspectiveCardProps) {
   const [expanded, setExpanded] = useState<boolean>(true);
-  const cfg = PERSPECTIVE_CONFIG[perspective.perspective_type] ?? {
-    name: perspective.perspective_type,
+  const pType =
+    perspective?.perspective_type ||
+    (perspective as unknown as { lens?: string })?.lens ||
+    "perspective";
+  const cfg = PERSPECTIVE_CONFIG[pType as PerspectiveType] ?? {
+    name: pType,
     role: "Boardroom Perspective",
     accentBorder: "border-zinc-800",
     accentBg: "bg-zinc-900/20",
@@ -182,7 +186,7 @@ export function PerspectiveCard({
           <span
             className={`inline-flex items-center rounded-md border ${cfg.badgeBorder} ${cfg.badgeBg} px-2.5 py-1 text-xs font-mono font-medium ${cfg.badgeText}`}
           >
-            {perspective.perspective_type.toUpperCase()}
+            {pType.toUpperCase()}
           </span>
           <button
             type="button"

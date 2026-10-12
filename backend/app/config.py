@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     ANALYSIS_TIMEOUT_SECONDS: float = 120.0
     AURA_FRAMER_OPERATION_TIMEOUT_SECONDS: Optional[float] = None
     AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS: Optional[float] = None
+    AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS: float = 90.0
+    AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS: float = 30.0
 
     @field_validator("ANALYSIS_TIMEOUT_SECONDS")
     @classmethod
@@ -49,6 +51,20 @@ class Settings(BaseSettings):
     def validate_boardroom_timeout(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v <= 0.0:
             raise ValueError("AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_boardroom_http_timeout(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS")
+    @classmethod
+    def validate_boardroom_min_headroom(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS must be non-negative")
         return v
 
     # Action Intelligence configuration

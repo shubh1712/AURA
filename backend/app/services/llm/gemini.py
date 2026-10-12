@@ -345,11 +345,19 @@ class GeminiLLMClient(LLMClient):
         attempt_records: List[Dict[str, Any]] = []
 
         def _determine_timeout_source(now: float) -> str:
+            rem_op = local_deadline - now
+            rem_par = (deadline_monotonic - now) if deadline_monotonic is not None else float("inf")
+            if deadline_monotonic is not None and rem_par <= rem_op:
+                return "parent"
+            if rem_op <= 0:
+                return "operation"
             if (deadline - now) <= 0:
                 if deadline_monotonic is not None and deadline_monotonic <= local_deadline:
                     return "parent"
                 return "operation"
-            return "request"
+            if deadline_monotonic is not None and rem_par < rem_op:
+                return "parent"
+            return "operation"
 
         def _record_attempt(
             status: str,
@@ -358,6 +366,7 @@ class GeminiLLMClient(LLMClient):
             t_end: float,
             effective_timeout: float,
             backoff_seconds: float = 0.0,
+            exhaustion_reason: Optional[str] = None,
         ) -> Optional[Dict[str, Any]]:
             if not diagnostics_enabled:
                 return None
@@ -371,6 +380,7 @@ class GeminiLLMClient(LLMClient):
                 "duration_seconds": dur,
                 "status": status,
                 "error_category": error_category,
+                "exhaustion_reason": exhaustion_reason,
                 "backoff_seconds": backoff_seconds,
                 "remaining_operation_seconds": rem_op,
                 "remaining_parent_seconds": rem_par,
@@ -457,12 +467,44 @@ class GeminiLLMClient(LLMClient):
             self._sleep_fn(actual_sleep)
             return actual_sleep
 
+        per_request_timeout = cfg.timeout_seconds if cfg.timeout_seconds else 30.0
+        min_retry_headroom = (
+            cfg.min_retry_headroom_seconds
+            if getattr(cfg, "min_retry_headroom_seconds", None) is not None
+            else 0.0
+        )
+
         while attempts < max_attempts:
             attempts += 1
 
-            # Check remaining deadline before each attempt
+            # Check remaining deadline and headroom before each attempt
             now_before = time.monotonic()
-            remaining = deadline - now_before
+            rem_op_before = max(0.0, local_deadline - now_before)
+            rem_par_before = max(0.0, deadline_monotonic - now_before) if deadline_monotonic is not None else float("inf")
+            remaining = min(rem_op_before, rem_par_before)
+
+            # For retry attempts (attempts > 1), enforce min_retry_headroom before initiating
+            if attempts > 1 and min_retry_headroom > 0.0 and remaining < min_retry_headroom:
+                timeout_source = _determine_timeout_source(now_before)
+                _update_diagnostic(
+                    status="timeout",
+                    final_call_duration=0.0,
+                    final_timeout_source=timeout_source,
+                )
+                raise LLMTimeoutError(
+                    f"Gemini API request timed out: {remaining:.1f}s remaining is insufficient for retry (requires {min_retry_headroom:.1f}s headroom).",
+                    details={
+                        "model": model_name,
+                        "timeout": operation_timeout,
+                        "timeout_source": timeout_source,
+                        "attempt": attempts - 1,
+                        "exhaustion_reason": "insufficient_retry_headroom",
+                        "remaining_operation_seconds": rem_op_before,
+                        "remaining_parent_seconds": rem_par_before if deadline_monotonic is not None else None,
+                        "min_retry_headroom_seconds": min_retry_headroom,
+                    },
+                )
+
             if remaining <= 0:
                 timeout_source = _determine_timeout_source(now_before)
                 _update_diagnostic(
@@ -481,7 +523,6 @@ class GeminiLLMClient(LLMClient):
                 )
 
             # Effective per-request timeout cannot exceed remaining operation budget
-            per_request_timeout = cfg.timeout_seconds if cfg.timeout_seconds else 30.0
             effective_http_timeout = min(per_request_timeout, remaining)
             create_kwargs["timeout"] = effective_http_timeout
 
@@ -494,8 +535,24 @@ class GeminiLLMClient(LLMClient):
                 t1_call = time.monotonic() if diagnostics_enabled else 0.0
                 t_call = (t1_call - t0_call) if diagnostics_enabled else 0.0
                 now = t1_call if diagnostics_enabled else time.monotonic()
-                is_exhausted = (attempts >= max_attempts) or ((deadline - now) <= 0)
+
+                rem_op = max(0.0, local_deadline - now)
+                rem_par = max(0.0, deadline_monotonic - now) if deadline_monotonic is not None else float("inf")
+                remaining_budget = min(rem_op, rem_par)
+
+                has_sufficient_headroom = (min_retry_headroom <= 0.0 or remaining_budget >= min_retry_headroom)
+                is_exhausted = (attempts >= max_attempts) or (remaining_budget <= 0) or (not has_sufficient_headroom)
                 timeout_source = _determine_timeout_source(now) if is_exhausted else None
+
+                exhaustion_reason = (
+                    "max_attempts"
+                    if attempts >= max_attempts
+                    else "insufficient_retry_headroom"
+                    if (not has_sufficient_headroom and remaining_budget > 0)
+                    else "budget_exhausted"
+                    if is_exhausted
+                    else None
+                )
 
                 att_rec = _record_attempt(
                     status="timeout",
@@ -503,6 +560,7 @@ class GeminiLLMClient(LLMClient):
                     t_start=t0_call,
                     t_end=t1_call,
                     effective_timeout=effective_http_timeout,
+                    exhaustion_reason=exhaustion_reason,
                 )
                 _update_diagnostic(
                     status="timeout",
@@ -510,13 +568,23 @@ class GeminiLLMClient(LLMClient):
                     final_timeout_source=timeout_source,
                 )
                 if is_exhausted:
+                    detail_msg = f"Gemini API request timed out after {operation_timeout:.1f}s."
+                    if exhaustion_reason == "insufficient_retry_headroom":
+                        detail_msg = (
+                            f"Gemini API request timed out after {now - start_time:.1f}s "
+                            f"(retry aborted: {remaining_budget:.1f}s remaining is insufficient for retry, requires {min_retry_headroom:.1f}s headroom)."
+                        )
                     raise LLMTimeoutError(
-                        f"Gemini API request timed out after {operation_timeout:.1f}s.",
+                        detail_msg,
                         details={
                             "model": model_name,
                             "timeout": operation_timeout,
                             "timeout_source": timeout_source,
                             "attempt": attempts,
+                            "exhaustion_reason": exhaustion_reason,
+                            "remaining_operation_seconds": rem_op,
+                            "remaining_parent_seconds": rem_par if deadline_monotonic is not None else None,
+                            "min_retry_headroom_seconds": min_retry_headroom,
                         },
                     ) from e
                 sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
@@ -671,7 +739,11 @@ class GeminiLLMClient(LLMClient):
                         status="rate_limit",
                         final_call_duration=t_call,
                     )
-                    if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
+                    now_err = time.monotonic()
+                    rem_op_err = max(0.0, local_deadline - now_err)
+                    rem_par_err = max(0.0, deadline_monotonic - now_err) if deadline_monotonic is not None else float("inf")
+                    rem_err = min(rem_op_err, rem_par_err)
+                    if attempts >= max_attempts or rem_err <= 0 or (min_retry_headroom > 0.0 and rem_err < min_retry_headroom):
                         raise LLMRateLimitError(
                             f"Gemini rate limit or quota exceeded ({status_code}).",
                             details={"status_code": status_code, "model": model_name},
@@ -695,7 +767,11 @@ class GeminiLLMClient(LLMClient):
                         status="server_error",
                         final_call_duration=t_call,
                     )
-                    if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
+                    now_err = time.monotonic()
+                    rem_op_err = max(0.0, local_deadline - now_err)
+                    rem_par_err = max(0.0, deadline_monotonic - now_err) if deadline_monotonic is not None else float("inf")
+                    rem_err = min(rem_op_err, rem_par_err)
+                    if attempts >= max_attempts or rem_err <= 0 or (min_retry_headroom > 0.0 and rem_err < min_retry_headroom):
                         raise LLMProviderError(
                             f"Gemini upstream server error ({status_code}).",
                             details={"status_code": status_code, "model": model_name},
@@ -719,7 +795,11 @@ class GeminiLLMClient(LLMClient):
                         status="transport_error",
                         final_call_duration=t_call,
                     )
-                    if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
+                    now_err = time.monotonic()
+                    rem_op_err = max(0.0, local_deadline - now_err)
+                    rem_par_err = max(0.0, deadline_monotonic - now_err) if deadline_monotonic is not None else float("inf")
+                    rem_err = min(rem_op_err, rem_par_err)
+                    if attempts >= max_attempts or rem_err <= 0 or (min_retry_headroom > 0.0 and rem_err < min_retry_headroom):
                         raise LLMError(
                             "Network transport error calling Gemini API.",
                             details={"model": model_name},

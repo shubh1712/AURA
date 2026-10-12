@@ -581,7 +581,7 @@ def test_14_deadline_expiry_before_synthesis_prevents_synthesis_call(monkeypatch
         nonlocal call_count
         call_count += 1
         # On early checks return 900.0; on check before synthesis return 1001.0
-        if call_count >= 4:
+        if call_count >= 8:
             return 1001.0
         return 900.0
 

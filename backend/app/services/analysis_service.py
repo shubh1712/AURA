@@ -201,6 +201,8 @@ class AnalysisService:
         analysis_timeout_seconds: Optional[float] = None,
         framer_operation_timeout_seconds: Optional[float] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
+        boardroom_http_timeout_seconds: Optional[float] = None,
+        boardroom_min_retry_headroom_seconds: Optional[float] = None,
         recommendation_operation_timeout_seconds: Optional[float] = None,
         scenario_operation_timeout_seconds: Optional[float] = None,
     ) -> None:
@@ -217,6 +219,8 @@ class AnalysisService:
             analysis_timeout_seconds: Optional overall wall-clock analysis deadline budget in seconds.
             framer_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 1 Decision Framer.
             boardroom_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 3 AI Boardroom perspectives.
+            boardroom_http_timeout_seconds: Optional opt-in HTTP request timeout for Stage 3 AI Boardroom perspectives.
+            boardroom_min_retry_headroom_seconds: Optional minimum retry headroom for Stage 3 AI Boardroom perspectives.
             recommendation_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 4 Recommendation Engine.
             scenario_operation_timeout_seconds: Optional opt-in operation ceiling for Stage 5 Scenario Generator.
         """
@@ -261,6 +265,42 @@ class AnalysisService:
             self.boardroom_operation_timeout_seconds: Optional[float] = float(raw_boardroom_to)
         else:
             self.boardroom_operation_timeout_seconds = None
+
+        raw_boardroom_http_to = boardroom_http_timeout_seconds
+        if raw_boardroom_http_to is None:
+            raw_boardroom_http_to = getattr(settings, "AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS", 90.0)
+            if raw_boardroom_http_to is None:
+                env_val = os.environ.get("AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_boardroom_http_to = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_BOARDROOM_HTTP_TIMEOUT_SECONDS value: {env_val}") from ve
+
+        if raw_boardroom_http_to is not None:
+            if float(raw_boardroom_http_to) <= 0.0:
+                raise ValueError("boardroom_http_timeout_seconds must be strictly greater than 0.0")
+            self.boardroom_http_timeout_seconds: float = float(raw_boardroom_http_to)
+        else:
+            self.boardroom_http_timeout_seconds = 90.0
+
+        raw_headroom = boardroom_min_retry_headroom_seconds
+        if raw_headroom is None:
+            raw_headroom = getattr(settings, "AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS", 30.0)
+            if raw_headroom is None:
+                env_val = os.environ.get("AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS")
+                if env_val is not None:
+                    try:
+                        raw_headroom = float(env_val.strip())
+                    except ValueError as ve:
+                        raise ValueError(f"Invalid AURA_BOARDROOM_MIN_RETRY_HEADROOM_SECONDS value: {env_val}") from ve
+
+        if raw_headroom is not None:
+            if float(raw_headroom) < 0.0:
+                raise ValueError("boardroom_min_retry_headroom_seconds must be non-negative")
+            self.boardroom_min_retry_headroom_seconds: float = float(raw_headroom)
+        else:
+            self.boardroom_min_retry_headroom_seconds = 30.0
 
         raw_recommendation_to = recommendation_operation_timeout_seconds
         if raw_recommendation_to is None:
@@ -321,6 +361,8 @@ class AnalysisService:
             self.reasoning_service = self._build_default_reasoning_service(
                 llm_client=effective_llm,
                 boardroom_operation_timeout_seconds=self.boardroom_operation_timeout_seconds,
+                boardroom_http_timeout_seconds=self.boardroom_http_timeout_seconds,
+                boardroom_min_retry_headroom_seconds=self.boardroom_min_retry_headroom_seconds,
             )
 
         if recommendation_service is not None and not isinstance(recommendation_service, DependsParam):
@@ -366,12 +408,16 @@ class AnalysisService:
         cls,
         llm_client: Optional[LLMClient] = None,
         boardroom_operation_timeout_seconds: Optional[float] = None,
+        boardroom_http_timeout_seconds: Optional[float] = None,
+        boardroom_min_retry_headroom_seconds: Optional[float] = None,
     ) -> ReasoningService:
         """Builds default ReasoningService wired with provided or default LLMClient."""
         client = llm_client or cls.get_default_client()
         return ReasoningService.create_default(
             llm_client=client,
             boardroom_operation_timeout_seconds=boardroom_operation_timeout_seconds,
+            boardroom_http_timeout_seconds=boardroom_http_timeout_seconds,
+            boardroom_min_retry_headroom_seconds=boardroom_min_retry_headroom_seconds,
         )
 
     @classmethod
@@ -427,6 +473,7 @@ class AnalysisService:
             if deadline_monotonic is not None
             else start_time + self.analysis_timeout_seconds
         )
+        stage_timings: Dict[str, float] = {}
 
         try:
             if time.monotonic() >= effective_deadline:
@@ -449,6 +496,7 @@ class AnalysisService:
             if framer_config is not None:
                 deconstruct_kwargs["config"] = framer_config
 
+            t_s1_start = time.monotonic()
             try:
                 try:
                     decision_model = self.engine.deconstruct(**deconstruct_kwargs)
@@ -467,6 +515,14 @@ class AnalysisService:
                     )
                 else:
                     raise
+            t_s1_end = time.monotonic()
+            stage_timings["stage1_decision_framer"] = t_s1_end - t_s1_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage1_decision_framer, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage1_decision_framer"],
+                max(0.0, effective_deadline - t_s1_end),
+            )
 
             if time.monotonic() >= effective_deadline:
                 raise AnalysisTimeoutError("Analysis operation exceeded end-to-end deadline before evidence gathering.")
@@ -475,6 +531,7 @@ class AnalysisService:
             if stage_callback:
                 stage_callback("stage2_evidence_engine")
 
+            t_s2_start = time.monotonic()
             try:
                 evidence_package = self.evidence_service.build_evidence_package(
                     decision_model=decision_model,
@@ -487,6 +544,14 @@ class AnalysisService:
                     )
                 else:
                     raise
+            t_s2_end = time.monotonic()
+            stage_timings["stage2_evidence_engine"] = t_s2_end - t_s2_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage2_evidence_engine, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage2_evidence_engine"],
+                max(0.0, effective_deadline - t_s2_end),
+            )
 
             if time.monotonic() >= effective_deadline:
                 raise AnalysisTimeoutError("Analysis operation exceeded end-to-end deadline before boardroom deliberation.")
@@ -495,38 +560,54 @@ class AnalysisService:
             if stage_callback:
                 stage_callback("stage3_ai_boardroom")
 
-            perspective_config = None
-            if self.boardroom_operation_timeout_seconds is not None:
-                perspective_config = LLMConfig(
-                    operation_timeout_seconds=self.boardroom_operation_timeout_seconds,
-                    timeout_seconds=min(45.0, self.boardroom_operation_timeout_seconds),
-                )
+            boardroom_op_to = (
+                self.boardroom_operation_timeout_seconds
+                if self.boardroom_operation_timeout_seconds is not None
+                else 120.0
+            )
+            effective_boardroom_http_to = min(self.boardroom_http_timeout_seconds, boardroom_op_to)
+
+            perspective_config = LLMConfig(
+                operation_timeout_seconds=boardroom_op_to,
+                timeout_seconds=effective_boardroom_http_to,
+                max_retries=1,
+                min_retry_headroom_seconds=self.boardroom_min_retry_headroom_seconds,
+                stage="stage3_ai_boardroom_perspectives",
+            )
 
             boardroom_kwargs: Dict[str, Any] = {
                 "decision_model": decision_model,
                 "evidence_package": evidence_package,
                 "deadline_monotonic": effective_deadline,
+                "perspective_config": perspective_config,
+                "boardroom_operation_timeout_seconds": boardroom_op_to,
+                "boardroom_http_timeout_seconds": self.boardroom_http_timeout_seconds,
+                "boardroom_min_retry_headroom_seconds": self.boardroom_min_retry_headroom_seconds,
             }
-            if perspective_config is not None:
-                boardroom_kwargs["perspective_config"] = perspective_config
 
+            t_s3_start = time.monotonic()
             try:
+                reasoning_board = self.reasoning_service.build_reasoning_board(**boardroom_kwargs)
+            except TypeError:
                 try:
-                    reasoning_board = self.reasoning_service.build_reasoning_board(**boardroom_kwargs)
-                except TypeError as te:
-                    if "unexpected keyword argument 'perspective_config'" in str(te):
-                        boardroom_kwargs.pop("perspective_config", None)
-                        reasoning_board = self.reasoning_service.build_reasoning_board(**boardroom_kwargs)
-                    else:
-                        raise
-            except TypeError as te:
-                if "unexpected keyword argument 'deadline_monotonic'" in str(te):
+                    reasoning_board = self.reasoning_service.build_reasoning_board(
+                        decision_model=decision_model,
+                        evidence_package=evidence_package,
+                        deadline_monotonic=effective_deadline,
+                    )
+                except TypeError:
                     reasoning_board = self.reasoning_service.build_reasoning_board(
                         decision_model=decision_model,
                         evidence_package=evidence_package,
                     )
-                else:
-                    raise
+            t_s3_end = time.monotonic()
+            stage_timings["stage3_ai_boardroom"] = t_s3_end - t_s3_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage3_ai_boardroom, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage3_ai_boardroom"],
+                max(0.0, effective_deadline - t_s3_end),
+            )
 
             # 4. Generate grounded recommendation & action plan (Recommendation Engine)
             if stage_callback:
@@ -536,6 +617,7 @@ class AnalysisService:
             recommendation_status: Optional[str] = None
             recommendation_error: Optional[str] = None
 
+            t_s4_start = time.monotonic()
             if time.monotonic() >= effective_deadline:
                 logger.warning(
                     "Analysis %s exceeded end-to-end deadline before Stage 4 recommendation generation.",
@@ -585,6 +667,14 @@ class AnalysisService:
                         recommendation_error = f"Recommendation generation timed out: {getattr(exc, 'message', str(exc))}"
                     else:
                         recommendation_error = f"Recommendation generation unavailable: {getattr(exc, 'message', str(exc))}"
+            t_s4_end = time.monotonic()
+            stage_timings["stage4_recommendation"] = t_s4_end - t_s4_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage4_recommendation, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage4_recommendation"],
+                max(0.0, effective_deadline - t_s4_end),
+            )
 
             # 5. Generate future scenarios & milestones (Scenario Engine)
             if stage_callback:
@@ -594,6 +684,7 @@ class AnalysisService:
             scenario_status: Optional[str] = None
             scenario_error: Optional[str] = None
 
+            t_s5_start = time.monotonic()
             # Enforce dependency policy: Stage 5 requires authoritative recommendation from Stage 4
             if recommendation is None:
                 logger.warning(
@@ -652,6 +743,14 @@ class AnalysisService:
                         scenario_error = f"Scenario generation timed out: {getattr(exc, 'message', str(exc))}"
                     else:
                         scenario_error = f"Scenario generation unavailable: {getattr(exc, 'message', str(exc))}"
+            t_s5_end = time.monotonic()
+            stage_timings["stage5_scenarios"] = t_s5_end - t_s5_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage5_scenarios, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage5_scenarios"],
+                max(0.0, effective_deadline - t_s5_end),
+            )
 
             # 6. Evaluate decision resilience (Deterministic Resilience Engine)
             if stage_callback:
@@ -661,6 +760,7 @@ class AnalysisService:
             resilience_status: Optional[str] = None
             resilience_error: Optional[str] = None
 
+            t_s6_start = time.monotonic()
             # Enforce dependency policy: Stage 6 requires authoritative ScenarioSet and all inputs
             if scenarios is None or recommendation is None:
                 logger.warning(
@@ -705,6 +805,14 @@ class AnalysisService:
                     )
                     resilience_status = "unavailable"
                     resilience_error = f"Resilience evaluation unavailable: {str(exc)}"
+            t_s6_end = time.monotonic()
+            stage_timings["stage6_resilience"] = t_s6_end - t_s6_start
+            logger.info(
+                "AURA Stage Metrics [%s]: stage=stage6_resilience, duration=%.3fs, remaining_parent_budget=%.3fs",
+                analysis_id,
+                stage_timings["stage6_resilience"],
+                max(0.0, effective_deadline - t_s6_end),
+            )
 
             # 7. Assemble validated response
             is_full_success = (
@@ -723,6 +831,25 @@ class AnalysisService:
                 message_text = f"Decision analysis completed with Boardroom deliberation; recommendation stage unavailable ({recommendation_error})."
             else:
                 message_text = "Decision analysis completed with partial success."
+
+            total_analysis_duration = time.monotonic() - start_time
+            self.last_stage_timings = dict(stage_timings)
+            self.last_total_duration = total_analysis_duration
+            logger.info(
+                "AURA Pipeline Execution Summary [%s]: total=%.3fs, status=%s, "
+                "s1_framer=%.3fs, s2_evidence=%.3fs, s3_boardroom=%.3fs, s4_rec=%.3fs, s5_scenarios=%.3fs, s6_resilience=%.3fs, "
+                "remaining_parent_budget=%.3fs",
+                analysis_id,
+                total_analysis_duration,
+                overall_status,
+                stage_timings.get("stage1_decision_framer", 0.0),
+                stage_timings.get("stage2_evidence_engine", 0.0),
+                stage_timings.get("stage3_ai_boardroom", 0.0),
+                stage_timings.get("stage4_recommendation", 0.0),
+                stage_timings.get("stage5_scenarios", 0.0),
+                stage_timings.get("stage6_resilience", 0.0),
+                max(0.0, effective_deadline - time.monotonic()),
+            )
 
             return AnalysisResponse(
                 analysis_id=analysis_id,

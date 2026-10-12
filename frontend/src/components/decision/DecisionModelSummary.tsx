@@ -7,7 +7,8 @@ interface DecisionModelSummaryProps {
   model: DecisionModel;
 }
 
-function formatSnakeCase(str: string): string {
+function formatSnakeCase(str?: string | null): string {
+  if (!str) return "Not Specified";
   return str
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
