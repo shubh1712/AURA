@@ -224,7 +224,7 @@ class AnalysisJobManager:
             HTTPException 404: If job does not exist.
             HTTPException 403: If owner_id does not match job owner.
         """
-        job = self.storage.get_job(job_id)
+        job = self.storage.get_job_by_any_id(job_id)
         if not job:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -248,7 +248,7 @@ class AnalysisJobManager:
             HTTPException 504: If job timed out.
             HTTPException 500/502/503: If job failed.
         """
-        job = self.storage.get_job(job_id)
+        job = self.storage.get_job_by_any_id(job_id)
         if not job:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -301,6 +301,7 @@ class AnalysisJobManager:
 
     def _record_to_response(self, job: JobRecord) -> AnalysisJobStatusResponse:
         """Maps an internal JobRecord to an external AnalysisJobStatusResponse schema."""
+        analysis_id = job.response.analysis_id if job.response is not None else None
         return AnalysisJobStatusResponse(
             job_id=job.job_id,
             status=job.status,
@@ -312,6 +313,7 @@ class AnalysisJobManager:
             error=job.error_message,
             error_status_code=job.error_status_code,
             owner_id=job.owner_id,
+            analysis_id=analysis_id,
         )
 
     def shutdown(self, wait: bool = True) -> None:

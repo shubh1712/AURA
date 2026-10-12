@@ -532,14 +532,14 @@ def test_06_invalid_numerical_input(test_setup):
         f"/api/analysis/{job_id}/simulate",
         json={"adjustments": [{"variable_id": "var_monthly_cloud_spend", "proposed_value": "not-a-number"}]},
     )
-    assert res1.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res1.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     # NaN / Infinity via JSON null or string representation
     res2 = client.post(
         f"/api/analysis/{job_id}/simulate",
         json={"adjustments": [{"variable_id": "var_monthly_cloud_spend", "proposed_value": None}]},
     )
-    assert res2.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res2.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 def test_07_duplicate_adjustment(test_setup):
@@ -559,7 +559,7 @@ def test_07_duplicate_adjustment(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "duplicate adjustment" in res.text.lower()
 
 
@@ -579,7 +579,7 @@ def test_08_unknown_variable(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "unknown variable" in res.text.lower()
 
 
@@ -599,7 +599,7 @@ def test_09_unit_mismatch(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "unit mismatch" in res.text.lower()
 
 
@@ -620,7 +620,7 @@ def test_10_out_of_range_adjustment(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "minimum bound" in res.text.lower()
 
 
@@ -686,7 +686,7 @@ def test_13_historical_four_stage_analysis(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "missing required stages" in res.text.lower()
 
 
@@ -754,7 +754,7 @@ def test_16_cross_artifact_mismatch(test_setup):
     }
 
     res = client.post(f"/api/analysis/{job_id}/simulate", json=payload)
-    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "referential integrity mismatch" in res.text.lower()
 
 

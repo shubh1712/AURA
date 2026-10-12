@@ -5,6 +5,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.analysis_jobs import router as jobs_router
 from app.api.routes.simulation import router as simulation_router
+from app.api.routes.action_intelligence import router as action_intelligence_router
 
 
 def create_application() -> FastAPI:
@@ -41,6 +42,9 @@ def create_application() -> FastAPI:
     # Day 7 Phase 7B What-if Simulation routes
     app.include_router(simulation_router, prefix=settings.API_V1_STR)
     app.include_router(simulation_router)
+    # Day 8 Phase 8A Action Intelligence routes
+    app.include_router(action_intelligence_router, prefix=settings.API_V1_STR)
+    app.include_router(action_intelligence_router)
 
     return app
 

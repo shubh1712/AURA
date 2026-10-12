@@ -395,6 +395,22 @@ class FakeLLMClient(LLMClient):
         except ImportError:
             pass
 
+        # If requesting CandidateSimulationExplanation, construct realistic candidate simulation explanation
+        try:
+            from app.schemas.simulation import CandidateSimulationExplanation
+            if issubclass(response_schema, CandidateSimulationExplanation):
+                return CandidateSimulationExplanation(
+                    summary="Deterministic simulation evaluated variable adjustment against baseline constraints.",
+                    what_changed=["Adjusted candidate model variables from baseline values."],
+                    constraint_implications=["Evaluated constraint threshold boundaries and safety margins."],
+                    resilience_interpretation="Resilience evaluation reflects engine calculations without fabricated projections.",
+                    limitations=["Simulations evaluate isolated parameter sensitivity and do not model uncaptured externalities."],
+                    suggested_validation_steps=["Empirically benchmark proposed values before committing to production changes."],
+                    evidence_or_artifact_references=[],
+                )  # type: ignore
+        except ImportError:
+            pass
+
         try:
             return response_schema.model_validate({})
         except ValidationError as e:

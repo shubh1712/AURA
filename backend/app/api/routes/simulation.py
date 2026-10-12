@@ -7,11 +7,12 @@ what-if simulations against completed six-stage analyses, and retrieving persist
 import json
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.engines.simulation import simulate_what_if
 from app.schemas.job import JobStatus
 from app.schemas.simulation import (
+    SimulationExplanationResponse,
     SimulationListResponse,
     SimulationRequest,
     SimulationResult,
@@ -19,12 +20,24 @@ from app.schemas.simulation import (
     SimulationVariableDiscoveryResponse,
     compute_baseline_fingerprint,
 )
+from app.services.analysis_service import get_llm_client
 from app.services.jobs.manager import AnalysisJobManager, get_job_manager
+from app.services.llm.client import LLMClient
+from app.services.simulation.explanation import SimulationExplanationService
 from app.services.simulation.variables import discover_simulation_variables
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Simulation"])
+
+
+def _check_simulation_access(job: Any, x_owner_id: Optional[str]) -> None:
+    """Verifies caller identity matches job owner if ownership was specified."""
+    if job.owner_id and x_owner_id and job.owner_id != x_owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: owner mismatch for analysis.",
+        )
 
 
 @router.get(
@@ -36,6 +49,7 @@ router = APIRouter(tags=["Simulation"])
 async def get_simulation_variables(
     analysis_id: str,
     manager: AnalysisJobManager = Depends(get_job_manager),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
 ) -> SimulationVariableDiscoveryResponse:
     """Discovers authoritative numeric variables from completed analysis artifacts.
 
@@ -49,6 +63,8 @@ async def get_simulation_variables(
             detail=f"Analysis '{analysis_id}' not found.",
         )
 
+    _check_simulation_access(job, x_owner_id)
+
     if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -57,13 +73,13 @@ async def get_simulation_variables(
 
     if job.status in (JobStatus.FAILED, JobStatus.TIMED_OUT) or job.response is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Analysis terminated with status '{job.status.value}'; cannot discover simulation variables.",
         )
 
     if job.response.decision_model is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Analysis does not contain a valid DecisionModel (Stage 1).",
         )
 
@@ -115,6 +131,7 @@ async def run_simulation(
     analysis_id: str,
     payload: SimulationSubmitRequest,
     manager: AnalysisJobManager = Depends(get_job_manager),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
 ) -> SimulationResult:
     """Executes a pure deterministic what-if simulation against completed analysis artifacts.
 
@@ -128,6 +145,8 @@ async def run_simulation(
             detail=f"Analysis '{analysis_id}' not found.",
         )
 
+    _check_simulation_access(job, x_owner_id)
+
     if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -136,7 +155,7 @@ async def run_simulation(
 
     if job.status in (JobStatus.FAILED, JobStatus.TIMED_OUT) or job.response is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Analysis terminated with status '{job.status.value}'; cannot execute simulation.",
         )
 
@@ -144,7 +163,7 @@ async def run_simulation(
     resp = job.response
     if resp.decision_model is None or resp.scenarios is None or resp.recommendation is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Analysis is missing required stages for what-if simulation (Stages 1, 4, and 5 are required).",
         )
 
@@ -186,7 +205,7 @@ async def run_simulation(
         )
     except ValueError as ve:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(ve),
         )
 
@@ -213,6 +232,7 @@ async def get_simulation_by_id(
     analysis_id: str,
     simulation_id: str,
     manager: AnalysisJobManager = Depends(get_job_manager),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
 ) -> SimulationResult:
     """Retrieves a persisted simulation result associated with an analysis."""
     job = manager.storage.get_job_by_any_id(analysis_id)
@@ -221,6 +241,8 @@ async def get_simulation_by_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis '{analysis_id}' not found.",
         )
+
+    _check_simulation_access(job, x_owner_id)
 
     sim_row = manager.storage.get_simulation(
         simulation_id=simulation_id,
@@ -244,6 +266,7 @@ async def get_simulation_by_id(
 async def list_simulations_for_analysis(
     analysis_id: str,
     manager: AnalysisJobManager = Depends(get_job_manager),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
 ) -> SimulationListResponse:
     """Lists all saved simulations for an analysis, sorted by creation date descending."""
     job = manager.storage.get_job_by_any_id(analysis_id)
@@ -253,6 +276,8 @@ async def list_simulations_for_analysis(
             detail=f"Analysis '{analysis_id}' not found.",
         )
 
+    _check_simulation_access(job, x_owner_id)
+
     sim_rows = manager.storage.list_simulations(job_id_or_analysis_id=job.job_id)
     sims = [SimulationResult.model_validate_json(r["result_json"]) for r in sim_rows]
 
@@ -261,4 +286,56 @@ async def list_simulations_for_analysis(
         analysis_id=canonical_analysis_id,
         simulations=sims,
         total_count=len(sims),
+    )
+
+
+@router.get(
+    "/analysis/{analysis_id}/simulations/{simulation_id}/explain",
+    response_model=SimulationExplanationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve a cached grounded AI explanation for a what-if simulation run if available",
+)
+async def get_cached_simulation_explanation(
+    analysis_id: str,
+    simulation_id: str,
+    manager: AnalysisJobManager = Depends(get_job_manager),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
+) -> SimulationExplanationResponse:
+    """Retrieves a previously cached AI explanation for a simulation run.
+
+    Purely read-only; does not invoke Gemini or alter simulation state.
+    Returns HTTP 404 if no valid cached explanation exists.
+    """
+    service = SimulationExplanationService(manager=manager, llm_client=None)
+    return service.get_cached_explanation(
+        analysis_id=analysis_id,
+        simulation_id=simulation_id,
+        owner_id=x_owner_id,
+    )
+
+
+@router.post(
+    "/analysis/{analysis_id}/simulations/{simulation_id}/explain",
+    response_model=SimulationExplanationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Generate or retrieve a grounded AI explanation for a what-if simulation run",
+)
+async def explain_simulation_run(
+    analysis_id: str,
+    simulation_id: str,
+    manager: AnalysisJobManager = Depends(get_job_manager),
+    llm_client: LLMClient = Depends(get_llm_client),
+    x_owner_id: Optional[str] = Header(default=None, alias="X-Owner-Id"),
+) -> SimulationExplanationResponse:
+    """Generates a grounded, non-hallucinated narrative explanation of a what-if simulation.
+
+    Leverages Gemini to synthesize operational consequences, constraint boundaries, and
+    methodological limitations. Does not alter deterministic engine calculations.
+    Reuses valid cached explanations where prompt version and baseline fingerprint match.
+    """
+    service = SimulationExplanationService(manager=manager, llm_client=llm_client)
+    return service.explain_simulation(
+        analysis_id=analysis_id,
+        simulation_id=simulation_id,
+        owner_id=x_owner_id,
     )

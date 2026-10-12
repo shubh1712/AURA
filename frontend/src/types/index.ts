@@ -19,3 +19,5 @@ export * from "./job";
 export * from "./api";
 export * from "./scenario";
 export * from "./resilience";
+export * from "./simulation";
+export * from "./action";

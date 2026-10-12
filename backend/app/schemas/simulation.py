@@ -403,6 +403,115 @@ class SimulationListResponse(BaseModel):
     total_count: int = Field(..., description="Total count of simulations retrieved.")
 
 
+class CandidateSimulationExplanation(BaseModel):
+    """Structured Pydantic model for LLM generation of what-if simulation narrative explanations."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    summary: str = Field(
+        ...,
+        min_length=10,
+        max_length=2500,
+        description="Executive summary of the simulated parameter changes and their direct consequences.",
+    )
+    what_changed: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Specific summary of variables adjusted, comparing baseline values to simulated values.",
+    )
+    constraint_implications: List[str] = Field(
+        default_factory=list,
+        description="Qualitative implications for operational constraints, safety margins, and threshold breaches.",
+    )
+    resilience_interpretation: str = Field(
+        ...,
+        min_length=10,
+        max_length=2500,
+        description="Explainable interpretation of resilience score changes or explanation of why resilience delta is not currently calculable.",
+    )
+    limitations: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Key assumptions, unmapped causal chains, and modeling caveats.",
+    )
+    suggested_validation_steps: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Concrete, empirical actions to validate the simulation assumptions before committing to decisions.",
+    )
+    evidence_or_artifact_references: List[str] = Field(
+        default_factory=list,
+        description="Direct references to source artifact IDs (DecisionModel, Scenarios, EvidencePackage).",
+    )
+
+
+class SimulationExplanationResponse(BaseModel):
+    """Authoritative API response contract for grounded simulation explanations."""
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    simulation_id: str = Field(
+        ...,
+        pattern=r"^sim_[a-f0-9]{32}$",
+        description="Unique deterministic simulation identifier.",
+    )
+    baseline_fingerprint: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Canonical SHA-256 baseline fingerprint verified during explanation generation.",
+    )
+    summary: str = Field(
+        ...,
+        min_length=10,
+        max_length=2500,
+        description="Executive summary of simulated changes and operational impacts.",
+    )
+    what_changed: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Explicit breakdown of adjusted variables, comparing baseline to simulated values.",
+    )
+    constraint_implications: List[str] = Field(
+        default_factory=list,
+        description="Implications for operational constraints and thresholds.",
+    )
+    resilience_interpretation: str = Field(
+        ...,
+        min_length=10,
+        max_length=2500,
+        description="Interpretation of resilience outcomes without fabricated metrics.",
+    )
+    limitations: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Modeling caveats, unmapped dynamics, and empirical bounds.",
+    )
+    suggested_validation_steps: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Empirical, testable next steps to validate assumptions.",
+    )
+    evidence_or_artifact_references: List[str] = Field(
+        default_factory=list,
+        description="Explicit references to authoritative upstream artifact IDs.",
+    )
+    generation_status: str = Field(
+        default="generated",
+        description="Execution status of explanation ('generated' or 'cached').",
+    )
+    model_name: Optional[str] = Field(
+        default=None,
+        description="LLM provider model identifier that generated the explanation.",
+    )
+    prompt_version: str = Field(
+        default="v1",
+        description="Prompt and schema contract version.",
+    )
+    created_at: Optional[str] = Field(
+        default=None,
+        description="ISO 8601 UTC timestamp when the explanation was produced.",
+    )
+
+
 # ------------------------------------------------------------------------------
 # 3. Deterministic Identity & Fingerprint Generation
 # ------------------------------------------------------------------------------

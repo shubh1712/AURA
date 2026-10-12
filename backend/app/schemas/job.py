@@ -148,3 +148,7 @@ class AnalysisJobStatusResponse(BaseModel):
         default=None,
         description="Owner identity if specified at job submission.",
     )
+    analysis_id: Optional[str] = Field(
+        default=None,
+        description="Canonical analysis identifier if job completed successfully.",
+    )

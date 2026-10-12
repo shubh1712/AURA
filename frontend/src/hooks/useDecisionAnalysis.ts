@@ -14,11 +14,18 @@ import {
   getAnalysisJobResult,
   ApiClientError,
 } from "@/lib/api";
+import {
+  saveActiveSession,
+  loadActiveSession,
+  clearActiveSession,
+} from "@/lib/session";
 
 export interface UseDecisionAnalysisReturn {
   formData: DecisionFormData;
   status: DecisionStatus;
   isLoading: boolean;
+  isRestoring: boolean;
+  restorationError: string | null;
   jobId: string | null;
   jobStatus: JobStatus | null;
   pipelineStage: PipelineStage | null;
@@ -31,6 +38,7 @@ export interface UseDecisionAnalysisReturn {
   reset: () => void;
   clearError: () => void;
   submitAnalysis: () => Promise<boolean>;
+  retryRestoration: () => Promise<void>;
 }
 
 const INITIAL_FORM_DATA: DecisionFormData = {
@@ -44,12 +52,15 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
 /**
  * Reusable React hook for managing decision intake, validation,
- * asynchronous job submission, stage-aware polling, and result retrieval.
+ * asynchronous job submission, stage-aware polling, session restoration across refreshes,
+ * and complete result retrieval.
  */
-export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
+export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysisReturn {
   const [formData, setFormData] = useState<DecisionFormData>(INITIAL_FORM_DATA);
   const [status, setStatus] = useState<DecisionStatus>("idle");
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isRestoring, setIsRestoring] = useState<boolean>(true);
+  const [restorationError, setRestorationError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [pipelineStage, setPipelineStage] = useState<PipelineStage | null>(null);
@@ -105,12 +116,15 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
   }, []);
 
   const reset = useCallback(() => {
+    clearActiveSession();
     activeJobIdRef.current = null;
     isSubmittingRef.current = false;
     clearPollingTimer();
     setFormData(INITIAL_FORM_DATA);
     setStatus("idle");
     setIsLoading(false);
+    setIsRestoring(false);
+    setRestorationError(null);
     setJobId(null);
     setJobStatus(null);
     setPipelineStage(null);
@@ -132,7 +146,7 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
       }
 
       try {
-        const jobStatusResp = await getAnalysisJobStatus(targetJobId);
+        const jobStatusResp = await getAnalysisJobStatus(targetJobId, ownerId);
 
         // Discard response if user reset or started a new job
         if (activeJobIdRef.current !== targetJobId) {
@@ -149,12 +163,19 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
         if (jobStatusResp.status === "succeeded") {
           // Terminal Success: Retrieve full validated AnalysisResponse
           try {
-            const finalResult = await getAnalysisJobResult(targetJobId);
+            const finalResult = await getAnalysisJobResult(targetJobId, ownerId);
             if (activeJobIdRef.current === targetJobId) {
               setApiResponse(finalResult);
               setStatus("completed");
               setIsLoading(false);
               isSubmittingRef.current = false;
+
+              // Persist canonical session reference
+              saveActiveSession({
+                jobId: targetJobId,
+                analysisId: finalResult.analysis_id,
+                ownerId: ownerId ?? undefined,
+              });
             }
           } catch (resErr) {
             if (activeJobIdRef.current === targetJobId) {
@@ -233,16 +254,133 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
         }, POLLING_INTERVAL_MS);
       }
     },
-    []
+    [ownerId]
   );
 
   useEffect(() => {
     pollJobStatusRef.current = pollJobStatus;
   }, [pollJobStatus]);
 
+  /**
+   * Session Restoration Runner:
+   * Restores an active or previously completed analysis without re-running stages or calling Gemini/Brave.
+   */
+  const restoreSession = useCallback(async () => {
+    const session = loadActiveSession();
+    if (!session || (!session.jobId && !session.analysisId)) {
+      setIsRestoring(false);
+      return;
+    }
+
+    setIsRestoring(true);
+    setRestorationError(null);
+
+    const targetLookupId = session.jobId || session.analysisId!;
+    const effectiveOwner = ownerId || session.ownerId;
+
+    try {
+      const statusResp = await getAnalysisJobStatus(targetLookupId, effectiveOwner);
+      const canonicalJobId = statusResp.job_id || session.jobId || targetLookupId;
+
+      if (statusResp.status === "succeeded") {
+        const finalResult = await getAnalysisJobResult(targetLookupId, effectiveOwner);
+        activeJobIdRef.current = canonicalJobId;
+        setJobId(canonicalJobId);
+        setJobStatus("succeeded");
+        setPipelineStage("completed");
+        setApiResponse(finalResult);
+        setStatus("completed");
+        setIsLoading(false);
+
+        if (finalResult.question) {
+          setFormData((prev) => ({
+            ...prev,
+            question: finalResult.question,
+          }));
+        }
+
+        saveActiveSession({
+          jobId: canonicalJobId,
+          analysisId: finalResult.analysis_id,
+          ownerId: effectiveOwner,
+        });
+      } else if (statusResp.status === "queued" || statusResp.status === "running") {
+        activeJobIdRef.current = canonicalJobId;
+        setJobId(canonicalJobId);
+        setJobStatus(statusResp.status);
+        setPipelineStage(statusResp.stage);
+        setProgressMessage(statusResp.progress_message || "Resuming analysis...");
+        setIsLoading(true);
+        setStatus("submitting");
+
+        pollTimerRef.current = setTimeout(() => {
+          pollJobStatusRef.current?.(canonicalJobId);
+        }, POLLING_INTERVAL_MS);
+      } else if (statusResp.status === "timed_out") {
+        setApiError(
+          statusResp.error || "The previous decision analysis exceeded its allowed processing time."
+        );
+        setApiErrorStatusCode(504);
+        setStatus("error");
+      } else if (statusResp.status === "failed") {
+        setApiError(
+          statusResp.error || "The previous decision analysis encountered an unrecoverable failure."
+        );
+        setApiErrorStatusCode(statusResp.error_status_code || 500);
+        setStatus("error");
+      }
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        if (err.statusCode === 404) {
+          // If query with jobId failed but analysisId is present, try direct lookup with analysisId
+          if (session.analysisId && session.analysisId !== targetLookupId) {
+            try {
+              const directResult = await getAnalysisJobResult(session.analysisId, effectiveOwner);
+              activeJobIdRef.current = session.analysisId;
+              setJobId(session.analysisId);
+              setJobStatus("succeeded");
+              setPipelineStage("completed");
+              setApiResponse(directResult);
+              setStatus("completed");
+              setIsLoading(false);
+              if (directResult.question) {
+                setFormData((prev) => ({ ...prev, question: directResult.question }));
+              }
+              return;
+            } catch {
+              // Both lookups failed
+            }
+          }
+          setRestorationError("Your previous analysis could not be found.");
+          clearActiveSession();
+        } else if (err.statusCode === 403) {
+          setRestorationError("Access to the previous analysis was denied.");
+          clearActiveSession();
+        } else {
+          setRestorationError(`Unable to reconnect to the analysis service: ${err.message}`);
+        }
+      } else {
+        setRestorationError("Unable to reconnect to the analysis service. Please verify that the backend is running.");
+      }
+    } finally {
+      setIsRestoring(false);
+    }
+  }, [ownerId]);
+
+  // Execute session restoration on initial mount
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      restoreSession();
+    }, 0);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [restoreSession]);
+
   const submitAnalysis = useCallback(async (): Promise<boolean> => {
     // Prevent double submission
-    if (isSubmittingRef.current || isLoading) {
+    if (isSubmittingRef.current || isLoading || isRestoring) {
       return false;
     }
 
@@ -286,11 +424,14 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
 
     try {
       // Step 1: Submit job to async API POST /api/analysis/jobs
-      const jobResponse = await createAnalysisJob({
-        question: trimmedQuestion,
-        context: contextPayload,
-        constraints: constraintsList,
-      });
+      const jobResponse = await createAnalysisJob(
+        {
+          question: trimmedQuestion,
+          context: contextPayload,
+          constraints: constraintsList,
+        },
+        ownerId
+      );
 
       const newJobId = jobResponse.job_id;
       activeJobIdRef.current = newJobId;
@@ -300,6 +441,12 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
       if (jobResponse.progress_message) {
         setProgressMessage(jobResponse.progress_message);
       }
+
+      // Persist active session immediately
+      saveActiveSession({
+        jobId: newJobId,
+        ownerId: ownerId ?? undefined,
+      });
 
       // Step 2: Begin bounded polling cycle
       pollTimerRef.current = setTimeout(() => {
@@ -324,12 +471,14 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
       activeJobIdRef.current = null;
       return false;
     }
-  }, [formData, isLoading, clearPollingTimer]);
+  }, [formData, isLoading, isRestoring, ownerId, clearPollingTimer]);
 
   return {
     formData,
     status,
     isLoading,
+    isRestoring,
+    restorationError,
     jobId,
     jobStatus,
     pipelineStage,
@@ -342,5 +491,6 @@ export function useDecisionAnalysis(): UseDecisionAnalysisReturn {
     reset,
     clearError,
     submitAnalysis,
+    retryRestoration: restoreSession,
   };
 }

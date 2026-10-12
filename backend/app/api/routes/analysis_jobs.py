@@ -56,6 +56,18 @@ async def create_analysis_job(
     status_code=status.HTTP_200_OK,
     include_in_schema=False,
 )
+@router.get(
+    "/analysis/{job_id}/status",
+    response_model=AnalysisJobStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Poll status and stage by analysis_id or job_id",
+)
+@router.get(
+    "/analysis/jobs/{job_id}/status",
+    response_model=AnalysisJobStatusResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
 async def get_analysis_job_status(
     job_id: str,
     owner_id: Optional[str] = Query(None, description="Optional owner identity for access control"),
@@ -78,6 +90,12 @@ async def get_analysis_job_status(
     response_model=AnalysisResponse,
     status_code=status.HTTP_200_OK,
     include_in_schema=False,
+)
+@router.get(
+    "/analysis/{job_id}/result",
+    response_model=AnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve completed AnalysisResponse by analysis_id or job_id",
 )
 async def get_analysis_job_result(
     job_id: str,

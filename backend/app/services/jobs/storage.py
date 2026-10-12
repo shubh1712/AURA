@@ -10,7 +10,8 @@ import json
 import logging
 import sqlite3
 import threading
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
@@ -130,6 +131,58 @@ class SQLiteJobStorage:
             """)
             self._conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_simulations_analysis ON what_if_simulations(analysis_id);
+            """)
+            # What-if simulation AI explanation persistence table
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS what_if_simulation_explanations (
+                    simulation_id TEXT PRIMARY KEY,
+                    analysis_id TEXT NOT NULL,
+                    baseline_fingerprint TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    explanation_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sim_exp_analysis ON what_if_simulation_explanations(analysis_id);
+            """)
+            # Action Intelligence plan persistence table (Day 8A)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS action_plans (
+                    plan_id TEXT PRIMARY KEY,
+                    analysis_id TEXT NOT NULL,
+                    source_recommendation_fingerprint TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    generator_version TEXT NOT NULL,
+                    plan_json TEXT NOT NULL,
+                    owner_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_action_plans_analysis ON action_plans(analysis_id);
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_action_plans_fingerprint ON action_plans(source_recommendation_fingerprint);
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_action_plans_owner ON action_plans(owner_id);
+            """)
+            # Action Intelligence generation claims (Day 8B durable concurrency control)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS action_plan_claims (
+                    analysis_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    claimed_at TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    owner_id TEXT,
+                    error_message TEXT
+                );
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_claims_status ON action_plan_claims(status);
             """)
             self._conn.commit()
 
@@ -524,6 +577,54 @@ class SQLiteJobStorage:
             rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    def save_simulation_explanation(
+        self,
+        simulation_id: str,
+        analysis_id: str,
+        baseline_fingerprint: str,
+        prompt_version: str,
+        model_name: str,
+        explanation_json: str,
+        created_at: Optional[str] = None,
+    ) -> None:
+        """Persists a what-if simulation AI explanation idempotently."""
+        cat = created_at or _utc_now_iso()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO what_if_simulation_explanations (
+                    simulation_id, analysis_id, baseline_fingerprint,
+                    prompt_version, model_name, explanation_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    simulation_id,
+                    analysis_id,
+                    baseline_fingerprint,
+                    prompt_version,
+                    model_name,
+                    explanation_json,
+                    cat,
+                ),
+            )
+            self._conn.commit()
+
+    def get_simulation_explanation(
+        self,
+        simulation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieves a persisted simulation AI explanation by simulation ID."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM what_if_simulation_explanations WHERE simulation_id = ?;",
+                (simulation_id,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return dict(row)
+
     def get_job_by_any_id(self, id_str: str) -> Optional[JobRecord]:
         """Resolves a JobRecord by either job_id directly or by internal analysis_id."""
         job = self.get_job(id_str)
@@ -542,3 +643,195 @@ class SQLiteJobStorage:
             if rec.response is not None and rec.response.analysis_id == id_str:
                 return rec
         return None
+
+    def save_action_plan(
+        self,
+        plan_id: str,
+        analysis_id: str,
+        source_recommendation_fingerprint: str,
+        schema_version: str,
+        generator_version: str,
+        plan_json: str,
+        owner_id: Optional[str] = None,
+        created_at: Optional[str] = None,
+    ) -> None:
+        """Persists or replaces an IntelligentActionPlan idempotently."""
+        cat = created_at or _utc_now_iso()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO action_plans (
+                    plan_id, analysis_id, source_recommendation_fingerprint,
+                    schema_version, generator_version, plan_json, owner_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    plan_id,
+                    analysis_id,
+                    source_recommendation_fingerprint,
+                    schema_version,
+                    generator_version,
+                    plan_json,
+                    owner_id,
+                    cat,
+                ),
+            )
+            self._conn.commit()
+
+    def get_action_plan(
+        self,
+        analysis_id: str,
+        owner_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieves the latest persisted action plan for an analysis, respecting owner_id scoping."""
+        with self._lock:
+            if owner_id:
+                cur = self._conn.execute(
+                    """
+                    SELECT * FROM action_plans
+                    WHERE analysis_id = ? AND (owner_id IS NULL OR owner_id = ?)
+                    ORDER BY created_at DESC LIMIT 1;
+                    """,
+                    (analysis_id, owner_id),
+                )
+            else:
+                cur = self._conn.execute(
+                    """
+                    SELECT * FROM action_plans
+                    WHERE analysis_id = ?
+                    ORDER BY created_at DESC LIMIT 1;
+                    """,
+                    (analysis_id,),
+                )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return dict(row)
+
+    def get_action_plan_by_id(
+        self,
+        plan_id: str,
+        owner_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieves a persisted action plan by its unique plan_id."""
+        with self._lock:
+            if owner_id:
+                cur = self._conn.execute(
+                    """
+                    SELECT * FROM action_plans
+                    WHERE plan_id = ? AND (owner_id IS NULL OR owner_id = ?);
+                    """,
+                    (plan_id, owner_id),
+                )
+            else:
+                cur = self._conn.execute(
+                    "SELECT * FROM action_plans WHERE plan_id = ?;",
+                    (plan_id,),
+                )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return dict(row)
+
+    def delete_action_plan(
+        self,
+        analysis_id: str,
+    ) -> None:
+        """Deletes action plans associated with an analysis."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM action_plans WHERE analysis_id = ?;",
+                (analysis_id,),
+            )
+            self._conn.commit()
+
+    def acquire_action_plan_claim(
+        self,
+        analysis_id: str,
+        owner_id: Optional[str] = None,
+        ttl_seconds: float = 90.0,
+    ) -> Tuple[bool, str, str]:
+        """Attempts to acquire a durable generation claim for analysis_id in SQLite.
+
+        Returns:
+            Tuple of (acquired: bool, status: str, claim_id: str).
+            If acquired is False, another worker/request holds an active unexpired claim ('running').
+        """
+        now = time.time()
+        claim_id = str(uuid.uuid4())
+        claimed_at = _utc_now_iso()
+        expires_at = now + ttl_seconds
+
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT claim_id, status, expires_at FROM action_plan_claims WHERE analysis_id = ?;",
+                (analysis_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                curr_status = row["status"]
+                curr_expires = float(row["expires_at"])
+                if curr_status == "running" and now < curr_expires:
+                    # Active unexpired claim held by another process
+                    return False, "running", str(row["claim_id"])
+
+                # Previous claim is completed, failed, or expired. Overwrite atomically with new running claim.
+                self._conn.execute(
+                    """
+                    UPDATE action_plan_claims
+                    SET claim_id = ?, status = 'running', claimed_at = ?, expires_at = ?, owner_id = ?, error_message = NULL
+                    WHERE analysis_id = ?;
+                    """,
+                    (claim_id, claimed_at, expires_at, owner_id, analysis_id),
+                )
+                self._conn.commit()
+                return True, "acquired", claim_id
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO action_plan_claims (
+                        analysis_id, claim_id, status, claimed_at, expires_at, owner_id, error_message
+                    ) VALUES (?, ?, 'running', ?, ?, ?, NULL);
+                    """,
+                    (analysis_id, claim_id, claimed_at, expires_at, owner_id),
+                )
+                self._conn.commit()
+                return True, "acquired", claim_id
+
+    def release_action_plan_claim(
+        self,
+        analysis_id: str,
+        claim_id: str,
+        success: bool,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Transitions an action plan generation claim to 'ready' or 'failed'."""
+        new_status = "ready" if success else "failed"
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE action_plan_claims
+                SET status = ?, error_message = ?
+                WHERE analysis_id = ? AND claim_id = ?;
+                """,
+                (new_status, error_message, analysis_id, claim_id),
+            )
+            self._conn.commit()
+
+    def get_action_plan_claim(
+        self,
+        analysis_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieves current generation claim state for analysis_id."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM action_plan_claims WHERE analysis_id = ?;",
+                (analysis_id,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return None
+        return dict(row)

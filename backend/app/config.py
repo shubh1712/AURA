@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +50,54 @@ class Settings(BaseSettings):
         if v is not None and v <= 0.0:
             raise ValueError("AURA_BOARDROOM_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
         return v
+
+    # Action Intelligence configuration
+    AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS: float = 120.0
+    AURA_ACTION_INTELLIGENCE_HTTP_TIMEOUT_SECONDS: float = 90.0
+    AURA_ACTION_INTELLIGENCE_CLAIM_TTL_SECONDS: float = 180.0
+    AURA_ACTION_INTELLIGENCE_MAX_RETRIES: int = 0
+
+    @field_validator("AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_action_intelligence_op_timeout(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_ACTION_INTELLIGENCE_HTTP_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_action_intelligence_http_timeout(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("AURA_ACTION_INTELLIGENCE_HTTP_TIMEOUT_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_ACTION_INTELLIGENCE_CLAIM_TTL_SECONDS")
+    @classmethod
+    def validate_action_intelligence_claim_ttl(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("AURA_ACTION_INTELLIGENCE_CLAIM_TTL_SECONDS must be strictly greater than 0.0")
+        return v
+
+    @field_validator("AURA_ACTION_INTELLIGENCE_MAX_RETRIES")
+    @classmethod
+    def validate_action_intelligence_max_retries(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("AURA_ACTION_INTELLIGENCE_MAX_RETRIES must be non-negative")
+        return v
+
+    @model_validator(mode="after")
+    def validate_action_intelligence_timeout_chain(self) -> "Settings":
+        if self.AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS < self.AURA_ACTION_INTELLIGENCE_HTTP_TIMEOUT_SECONDS:
+            raise ValueError(
+                "AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS must be greater than or equal to "
+                "AURA_ACTION_INTELLIGENCE_HTTP_TIMEOUT_SECONDS"
+            )
+        if self.AURA_ACTION_INTELLIGENCE_CLAIM_TTL_SECONDS <= self.AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS:
+            raise ValueError(
+                "AURA_ACTION_INTELLIGENCE_CLAIM_TTL_SECONDS must be strictly greater than "
+                "AURA_ACTION_INTELLIGENCE_OPERATION_TIMEOUT_SECONDS to prevent premature claim expiration"
+            )
+        return self
 
     # Asynchronous job configuration
     AURA_JOBS_DB_PATH: str = "aura_jobs.db"

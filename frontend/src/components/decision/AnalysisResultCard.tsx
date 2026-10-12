@@ -20,13 +20,27 @@ import {
   ResilienceDashboard,
   ResilienceUnavailableBanner,
 } from "./resilience";
+import {
+  WhatIfDashboard,
+  SimulationUnavailableBanner,
+} from "./simulation";
+import {
+  ActionIntelligenceDashboard,
+  ActionUnavailableBanner,
+} from "./action";
 
 interface AnalysisResultCardProps {
   result: AnalysisResponse;
   onReset: () => void;
+  jobId?: string | null;
+  ownerId?: string | null;
 }
 
-export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps) {
+export function AnalysisResultCard({
+  result,
+  onReset,
+  ownerId,
+}: AnalysisResultCardProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async () => {
@@ -44,6 +58,8 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
       window.print();
     }
   };
+
+  const effectiveOwnerId = ownerId || null;
 
   const hasDecisionModel = Boolean(result.decision_model);
   const hasEvidencePackage = Boolean(result.evidence_package);
@@ -99,6 +115,14 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
     !result.scenario_status &&
     !result.resilience_status &&
     result.status === "completed";
+
+  // What-if Simulation state evaluation (Requires Stages 1, 4, and 5)
+  const hasSimulationPrerequisites =
+    hasDecisionModel && hasValidRecommendation && hasValidScenarios;
+
+  const showSimulationUnavailable =
+    !hasSimulationPrerequisites &&
+    (hasDecisionModel || hasValidRecommendation || isPartialSuccess || isHistorical);
 
   return (
     <div className="space-y-8 print:space-y-6">
@@ -344,6 +368,51 @@ export function AnalysisResultCard({ result, onReset }: AnalysisResultCardProps)
           </p>
         </div>
       )}
+
+      {/* 2j. What-if Simulation Engine (Interactive Parameter Testing) */}
+      {hasSimulationPrerequisites ? (
+        <section aria-label="What-if Simulation">
+          <WhatIfDashboard
+            analysisId={result.analysis_id}
+            ownerId={effectiveOwnerId}
+          />
+        </section>
+      ) : showSimulationUnavailable ? (
+        <section aria-label="What-if Simulation Notice">
+          <SimulationUnavailableBanner
+            historical={isHistorical || (!hasValidScenarios && !result.scenario_status)}
+            reason={
+              !hasDecisionModel
+                ? "Decision Model (Stage 1) is required for what-if simulation."
+                : !hasValidRecommendation
+                ? (result.recommendation_error || "Decision Recommendation (Stage 4) is required for what-if simulation.")
+                : !hasValidScenarios
+                ? (result.scenario_error || "Future Scenarios (Stage 5) are required for what-if simulation.")
+                : null
+            }
+          />
+        </section>
+      ) : null}
+
+      {/* 2k. Action Intelligence (Gemini-Powered Execution Roadmap) */}
+      {hasValidRecommendation ? (
+        <section aria-label="Action Intelligence">
+          <ActionIntelligenceDashboard
+            analysisId={result.analysis_id}
+            ownerId={effectiveOwnerId}
+          />
+        </section>
+      ) : isRecommendationUnavailable || isHistorical ? (
+        <section aria-label="Action Intelligence Notice">
+          <ActionUnavailableBanner
+            historical={isHistorical}
+            reason={
+              result.recommendation_error ||
+              "Decision Recommendation (Stage 4) is required to generate an operational Action Plan."
+            }
+          />
+        </section>
+      ) : null}
 
       {/* 2g. Historical Analysis Note (Only rendered if user needs clarification, but no error or failure message) */}
       {isHistorical && (
