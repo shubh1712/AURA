@@ -161,11 +161,11 @@ export function ActionIntelligenceRoadmapSection({ actions }: ActionRoadmapSecti
               </p>
 
               {/* Execution Steps */}
-              <div className="space-y-1.5 pt-1">
-                <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-zinc-400 print:text-zinc-700">
-                  Execution Steps:
-                </span>
-                {action.execution_steps && action.execution_steps.length > 0 ? (
+              {action.execution_steps && action.execution_steps.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-zinc-400 print:text-zinc-700">
+                    Execution Steps:
+                  </span>
                   <ol className="list-decimal list-inside space-y-1 text-xs text-zinc-200 print:text-black pl-1">
                     {action.execution_steps.map((step, idx) => (
                       <li key={idx} className="leading-relaxed">
@@ -173,12 +173,8 @@ export function ActionIntelligenceRoadmapSection({ actions }: ActionRoadmapSecti
                       </li>
                     ))}
                   </ol>
-                ) : (
-                  <div className="text-xs text-zinc-400 italic">
-                    Primary execution procedure defined in description above.
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Dependencies Awareness */}
               {action.dependencies && action.dependencies.length > 0 && (

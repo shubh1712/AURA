@@ -38,17 +38,19 @@ export default function AuraPage() {
       {/* Top Navigation */}
       <Header />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-8">
+      {/* Main Workspace Area: 1536px on large desktops, centered with responsive horizontal padding */}
+      <main className="flex-1 w-full max-w-[1536px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-10 py-8 sm:py-12 space-y-8">
         {/* 1 & 2: AURA Logo/Name & Short Description */}
-        <DecisionHero />
+        <div className={apiResponse ? "w-full" : "max-w-4xl mx-auto"}>
+          <DecisionHero />
+        </div>
 
         {/* Session Restoration Loading State */}
         {isRestoring ? (
           <div
             role="status"
             aria-live="polite"
-            className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-8 sm:p-10 text-center backdrop-blur-sm shadow-sm space-y-4"
+            className="max-w-4xl mx-auto rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-8 sm:p-10 text-center backdrop-blur-sm shadow-sm space-y-4"
           >
             <div className="flex items-center justify-center space-x-3 text-emerald-400">
               <svg
@@ -82,7 +84,7 @@ export default function AuraPage() {
           /* Session Restoration Notice / Error State */
           <div
             role="alert"
-            className="rounded-2xl border border-amber-900/40 bg-amber-950/20 p-6 space-y-4 text-zinc-200 shadow-sm"
+            className="max-w-4xl mx-auto rounded-2xl border border-amber-900/40 bg-amber-950/20 p-6 space-y-4 text-zinc-200 shadow-sm"
           >
             <div className="flex items-start space-x-3">
               <span className="text-amber-400 text-lg leading-none select-none">&#9888;</span>
@@ -110,7 +112,7 @@ export default function AuraPage() {
           </div>
         ) : (
           /* Decision Input Form */
-          <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6 sm:p-8 backdrop-blur-sm shadow-sm">
+          <div className={`${apiResponse ? "w-full" : "max-w-4xl mx-auto"} rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-6 sm:p-8 backdrop-blur-sm shadow-sm`}>
             <DecisionForm
               formData={formData}
               isLoading={isLoading}
@@ -132,7 +134,7 @@ export default function AuraPage() {
 
         {/* 9: Analysis Result Card (displayed once real FastAPI response returns or is restored) */}
         {!isRestoring && apiResponse && (
-          <section aria-labelledby="analysis-result-title">
+          <section aria-labelledby="analysis-result-title" className="w-full">
             <AnalysisResultCard result={apiResponse} onReset={reset} jobId={jobId} />
           </section>
         )}

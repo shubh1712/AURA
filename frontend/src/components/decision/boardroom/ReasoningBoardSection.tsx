@@ -90,8 +90,7 @@ export function ReasoningBoardSection({
         </div>
 
         {/* Perspective Quick Filter / Tab Bar */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <span className="text-xs text-zinc-400 font-medium mr-1">View:</span>
+        <div className="flex flex-wrap items-center gap-2 pt-1" role="tablist" aria-label="Perspective filters">
           <button
             type="button"
             onClick={() => setSelectedPerspective("all")}
@@ -144,7 +143,7 @@ export function ReasoningBoardSection({
         <div className="grid grid-cols-1 gap-6">
           {displayedPerspectives.map((persp) => (
             <PerspectiveCard
-              key={persp.id}
+              key={persp.id || persp.perspective_type}
               perspective={persp}
               evidencePackage={evidencePackage}
               decisionModel={decisionModel}

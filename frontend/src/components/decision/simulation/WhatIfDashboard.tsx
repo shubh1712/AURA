@@ -175,6 +175,10 @@ export function WhatIfDashboard({ analysisId, ownerId }: WhatIfDashboardProps) {
               ? "The analysis is currently executing. Simulation variables will become available once the pipeline completes."
               : discoveryErrorStatusCode === 404
               ? "Analysis artifact not found. Please verify the analysis identifier."
+              : discoveryErrorStatusCode === 500
+              ? `Internal Server Error: ${discoveryError || "AURA simulation engine encountered an internal server error while discovering variables. Please check backend service logs."}`
+              : !discoveryErrorStatusCode
+              ? `Network Connection Error: ${discoveryError || "Unable to reach AURA engine. Please verify that the backend is running and reachable."}`
               : discoveryError}
           </p>
         </div>
@@ -198,6 +202,10 @@ export function WhatIfDashboard({ analysisId, ownerId }: WhatIfDashboardProps) {
           <p className="leading-relaxed text-zinc-300 print:text-zinc-800">
             {simulationErrorStatusCode === 409
               ? "Baseline artifact fingerprint mismatch. The baseline artifacts have changed since this session started. Please reload the variables."
+              : simulationErrorStatusCode === 500
+              ? `Internal Server Error: ${simulationError || "AURA simulation engine encountered an internal error while evaluating the simulation."}`
+              : !simulationErrorStatusCode
+              ? `Network Connection Error: ${simulationError || "Unable to reach AURA engine. Please verify that the backend is running and reachable."}`
               : simulationError}
           </p>
         </div>

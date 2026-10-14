@@ -12,6 +12,8 @@ Enforces:
 - Stable, repeatable variable IDs with exact source lineage.
 """
 
+import math
+import re
 from typing import List, Optional, Set
 from app.schemas.decision_model import (
     Constraint,
@@ -26,18 +28,31 @@ from app.schemas.simulation import (
     SimulationVariableType,
 )
 
+_THRESHOLD_REGEX = re.compile(
+    r"(<=|>=|<|>|==|!=)\s*([+-]?[0-9]+(?:\.[0-9]+)?)"
+)
+
 
 def _determine_variable_type(var: Variable) -> SimulationVariableType:
     """Classifies a DecisionModel Variable into a SimulationVariableType."""
     unit_lower = (var.unit or "").strip().lower()
 
-    if var.variable_type == VariableType.CURRENCY or unit_lower in ("usd", "$", "eur", "€", "gbp", "£"):
+    if (
+        var.variable_type == VariableType.CURRENCY
+        or unit_lower in ("usd", "$", "eur", "€", "gbp", "£", "cad", "aud", "inr", "jpy", "cny")
+        or any(unit_lower.startswith(prefix) for prefix in ("usd", "eur", "gbp", "$", "€", "£"))
+    ):
         return SimulationVariableType.CURRENCY
-    elif var.variable_type == VariableType.PERCENTAGE or unit_lower in ("%", "pct", "percent"):
+    elif var.variable_type == VariableType.PERCENTAGE or unit_lower in ("%", "pct", "percent", "percentage"):
         return SimulationVariableType.PERCENTAGE
-    elif unit_lower in ("users", "customers", "nodes", "count", "headcount", "days", "months"):
+    elif unit_lower in (
+        "users", "customers", "nodes", "count", "headcount", "days", "months",
+        "scans", "vehicles", "units", "accounts", "tickets", "seats", "patients",
+        "procedures", "items", "hours", "weeks", "years", "fte", "servers",
+        "records", "transactions",
+    ):
         return SimulationVariableType.COUNT
-    elif unit_lower in ("ratio", "multiple"):
+    elif unit_lower in ("ratio", "multiple", "x", "factor"):
         return SimulationVariableType.RATIO
     return SimulationVariableType.NUMERIC
 
@@ -45,16 +60,71 @@ def _determine_variable_type(var: Variable) -> SimulationVariableType:
 def _determine_bounds(
     val_type: SimulationVariableType,
     baseline: float,
+    linked_constraint: Optional[Constraint] = None,
 ) -> tuple[Optional[float], Optional[float]]:
-    """Determines realistic bounds for a simulation variable based on its type and baseline."""
+    """Determines realistic, unit-aware, scale-aware bounds for a simulation variable.
+
+    Guarantees minimum_value <= baseline <= maximum_value for all discovered variables.
+    """
+    min_val: Optional[float] = None
+    max_val: Optional[float] = None
+
     if val_type == SimulationVariableType.PERCENTAGE:
         if 0.0 <= baseline <= 1.0:
-            return 0.0, 1.0
-        return 0.0, 100.0
-    elif val_type in (SimulationVariableType.CURRENCY, SimulationVariableType.COUNT):
+            min_val, max_val = 0.0, 1.0
+        elif -1.0 <= baseline < 0.0:
+            min_val, max_val = -1.0, 1.0
+        elif 0.0 <= baseline <= 100.0:
+            min_val, max_val = 0.0, 100.0
+        elif -100.0 <= baseline < 0.0:
+            min_val, max_val = -100.0, 100.0
+        elif 100.0 < baseline <= 1000.0:
+            min_val, max_val = 0.0, max(100.0, round(baseline * 2.5, 1))
+        else:
+            # Baseline exceeds standard percentage scale (e.g. 180,000 scan count).
+            # Assign valid non-clamped bounds so Pydantic validation passes,
+            # while the variable is flagged as unsupported for simulation.
+            min_val = 0.0
+            max_val = max(100.0, round(baseline * 2.0, 1))
+
+    elif val_type in (SimulationVariableType.CURRENCY, SimulationVariableType.COUNT, SimulationVariableType.NUMERIC):
         if baseline >= 0.0:
-            return 0.0, None
-    return None, None
+            min_val = 0.0
+            scale_floor = 1000.0 if val_type == SimulationVariableType.CURRENCY else 100.0
+            max_val = max(scale_floor, round(baseline * 2.5, 2)) if baseline > 0 else scale_floor
+        else:
+            min_val = round(baseline * 2.5, 2)
+            max_val = round(abs(baseline) * 2.5, 2)
+
+    elif val_type == SimulationVariableType.RATIO:
+        if baseline >= 0.0:
+            min_val = 0.0
+            max_val = max(5.0, round(baseline * 2.5, 2))
+        else:
+            min_val = round(baseline * 2.5, 2)
+            max_val = max(5.0, round(abs(baseline) * 2.5, 2))
+
+    # If a linked operational constraint specifies a threshold limit exceeding max_val,
+    # expand max_val so the breach condition can be tested via simulation slider
+    if linked_constraint and linked_constraint.threshold_expression and max_val is not None:
+        match = _THRESHOLD_REGEX.search(linked_constraint.threshold_expression)
+        if match:
+            try:
+                limit = float(match.group(2))
+                if limit > max_val:
+                    max_val = round(limit * 1.5, 2)
+            except (ValueError, TypeError):
+                pass
+
+    # Invariant guarantee: minimum_value <= baseline <= maximum_value
+    if min_val is not None and baseline < min_val:
+        min_val = baseline
+    if max_val is not None and baseline > max_val:
+        max_val = max(max_val * 2.0, baseline * 2.0)
+    if min_val is not None and max_val is not None and min_val > max_val:
+        max_val = max(min_val * 2.0, baseline * 2.0)
+
+    return min_val, max_val
 
 
 def _find_linked_constraint(var: Variable, constraints: List[Constraint]) -> Optional[Constraint]:
@@ -113,21 +183,31 @@ def discover_simulation_variables(
             baseline_num = float(var.proposed_value)
             source_field = f"variables[{var.id}].proposed_value"
 
-        # If no structured numerical baseline exists, skip it!
+        # If no structured numerical baseline exists or is non-finite, skip it!
         # Do not parse numbers from descriptions, prompts, or prose narratives.
-        if baseline_num is None:
+        if baseline_num is None or not math.isfinite(baseline_num):
             continue
 
         seen_ids.add(var.id)
 
-        # 2. Determine value type and bounds
+        # 2. Determine value type, linked constraint, and bounds
         val_type = _determine_variable_type(var)
-        min_val, max_val = _determine_bounds(val_type, baseline_num)
-
-        # 3. Determine simulation support and reason
         linked_constraint = _find_linked_constraint(var, decision_model.constraints)
+        min_val, max_val = _determine_bounds(val_type, baseline_num, linked_constraint)
 
-        if not var.is_controllable:
+        # 3. Determine simulation support and transparent diagnostic reason
+        is_scale_contradiction = (
+            val_type == SimulationVariableType.PERCENTAGE and baseline_num > 1000.0
+        )
+
+        if is_scale_contradiction:
+            is_supported = False
+            support_reason = (
+                f"Cannot be safely modeled: baseline value ({baseline_num:g}) exceeds realistic percentage bounds (0-100%) "
+                f"for unit '{var.unit or '%'}', indicating an unnormalized scale or unit mismatch between absolute volume "
+                f"and percentage rate."
+            )
+        elif not var.is_controllable:
             is_supported = False
             support_reason = (
                 "External environmental variable; not directly controllable as an executive decision lever."
@@ -162,3 +242,4 @@ def discover_simulation_variables(
         discovered.append(sim_var)
 
     return discovered
+

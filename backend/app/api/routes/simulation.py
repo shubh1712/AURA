@@ -6,7 +6,7 @@ what-if simulations against completed six-stage analyses, and retrieving persist
 
 import json
 import logging
-from typing import Optional
+from typing import Optional, Any
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.engines.simulation import simulate_what_if
@@ -83,11 +83,23 @@ async def get_simulation_variables(
             detail="Analysis does not contain a valid DecisionModel (Stage 1).",
         )
 
-    discovered = discover_simulation_variables(
-        decision_model=job.response.decision_model,
-        scenario_set=job.response.scenarios,
-        recommendation=job.response.recommendation,
-    )
+    try:
+        discovered = discover_simulation_variables(
+            decision_model=job.response.decision_model,
+            scenario_set=job.response.scenarios,
+            recommendation=job.response.recommendation,
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to discover simulation variables for analysis '%s': %s",
+            analysis_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Variable discovery failed for analysis '{analysis_id}': {str(exc)}",
+        )
 
     baseline_fp = compute_baseline_fingerprint(
         decision_model=job.response.decision_model,

@@ -188,7 +188,7 @@ export function FutureExplorerTree({
         id: `edge-root-${scen.scenario_type}`,
         source: "root-decision",
         target: `scenario-${scen.scenario_type}`,
-        type: "bezier",
+        type: "default",
         animated: isSelected,
         style: {
           stroke: config.accentHex,

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/phase439.test.mjs tests/phase5_recommendation.test.mjs tests/phase5c_scenario.test.mjs tests/phase6c_resilience.test.mjs tests/phase6d_e2e.test.mjs tests/phase7c_simulation.test.mjs tests/phase7d_explanation.test.mjs tests/phase7f_session_restoration.test.mjs tests/phase8c_action_intelligence.test.mjs tests/phase8d_hardening.test.mjs"
+    "test": "tsx --test tests/phase439.test.mjs tests/phase5_recommendation.test.mjs tests/phase5c_scenario.test.mjs tests/phase6c_resilience.test.mjs tests/phase6d_e2e.test.mjs tests/phase7c_simulation.test.mjs tests/phase7d_explanation.test.mjs tests/phase7f_session_restoration.test.mjs tests/phase8c_action_intelligence.test.mjs tests/phase8d_hardening.test.mjs tests/day8gc_dashboard.test.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.12.0",

@@ -57,6 +57,12 @@ async function extractErrorInfo(res: Response): Promise<{
       ) {
         errorMessage = `${errorMessage} (${(errorJson.detail as { message: unknown }).message})`;
       }
+    } else if (res.status === 500) {
+      if (typeof errorJson.detail === "string") {
+        errorMessage = `Internal server error: ${errorJson.detail}`;
+      } else {
+        errorMessage = "AURA engine encountered an internal server error while processing the request.";
+      }
     } else if (Array.isArray(errorJson.detail)) {
       // FastAPI validation error array
       errorMessage = errorJson.detail
@@ -77,6 +83,8 @@ async function extractErrorInfo(res: Response): Promise<{
     // Response was not JSON
     if (res.status === 504) {
       errorMessage = "The decision analysis exceeded its allowed processing time.";
+    } else if (res.status === 500) {
+      errorMessage = "AURA engine encountered an internal server error (HTTP 500).";
     }
   }
 

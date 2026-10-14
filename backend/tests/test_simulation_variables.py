@@ -279,3 +279,142 @@ def test_06_stable_and_repeatable_variable_ids():
 
     assert [v.variable_id for v in run_1] == ["var_alpha", "var_beta"]
     assert [v.variable_id for v in run_1] == [v.variable_id for v in run_2]
+
+
+def test_07_hospital_radiology_regression_and_scale_aware_bounds():
+    """Verify regression fix for hospital radiology case:
+
+    1. 180,000 annual scan volume (count) is discovered with scale-aware bounds.
+    2. Currency amounts (e.g. $650,000 OpEx) receive scale-aware bounds.
+    3. Percentage metrics (e.g. 25% productivity) receive [0, 100] bounds.
+    4. Duration metrics (e.g. 36 hours turnaround) receive realistic bounds.
+    5. Invariant minimum_value <= baseline_value <= maximum_value is strictly maintained.
+    """
+    vars_list = [
+        Variable(
+            id="var_annual_scan_volume",
+            name="Annual Radiology Scan Volume",
+            description="Total annual scan throughput across hospital facilities.",
+            variable_type=VariableType.NUMERIC,
+            baseline_value=180000.0,
+            unit="scans",
+            is_controllable=True,
+        ),
+        Variable(
+            id="var_recurring_opex",
+            name="Annual Operating Cost Addition",
+            description="Additional annual operational costs for licensing and personnel.",
+            variable_type=VariableType.CURRENCY,
+            baseline_value=650000.0,
+            unit="USD/yr",
+            is_controllable=True,
+        ),
+        Variable(
+            id="var_productivity_gain",
+            name="Radiology Productivity Improvement",
+            description="Projected operational capacity gain across diagnostic reading stations.",
+            variable_type=VariableType.PERCENTAGE,
+            baseline_value=25.0,
+            unit="%",
+            is_controllable=True,
+        ),
+        Variable(
+            id="var_reporting_turnaround",
+            name="Reporting Turnaround Time",
+            description="Average elapsed time from scan completion to validated radiologist report.",
+            variable_type=VariableType.NUMERIC,
+            baseline_value=36.0,
+            unit="hours",
+            is_controllable=False,
+        ),
+    ]
+
+    constraints = [
+        Constraint(
+            id="cst_turnaround_time",
+            name="Reporting Turnaround Time Limit",
+            description="Average reporting turnaround time must be brought below 24 hours.",
+            threshold_expression="turnaround_time < 24",
+        ),
+        Constraint(
+            id="cst_min_efficiency_gain",
+            name="Minimum Operational Efficiency Gain",
+            description="Radiology operational efficiency must improve by at least 15%.",
+            threshold_expression="efficiency_gain >= 15",
+        ),
+    ]
+
+    dm = _build_test_decision_model(vars_list, constraints=constraints)
+    discovered = discover_simulation_variables(dm)
+
+    assert len(discovered) == 4
+
+    # 1. 180,000 annual scans
+    v_scans = next(v for v in discovered if v.variable_id == "var_annual_scan_volume")
+    assert v_scans.value_type == SimulationVariableType.COUNT
+    assert v_scans.baseline_value == 180000.0
+    assert v_scans.minimum_value == 0.0
+    assert v_scans.maximum_value is not None
+    assert v_scans.maximum_value >= 180000.0
+    assert v_scans.minimum_value <= v_scans.baseline_value <= v_scans.maximum_value
+    assert v_scans.simulation_supported is True
+
+    # 2. $650,000 OpEx
+    v_opex = next(v for v in discovered if v.variable_id == "var_recurring_opex")
+    assert v_opex.value_type == SimulationVariableType.CURRENCY
+    assert v_opex.baseline_value == 650000.0
+    assert v_opex.minimum_value == 0.0
+    assert v_opex.maximum_value is not None
+    assert v_opex.maximum_value >= 650000.0
+    assert v_opex.minimum_value <= v_opex.baseline_value <= v_opex.maximum_value
+    assert v_opex.simulation_supported is True
+
+    # 3. 25% productivity improvement
+    v_prod = next(v for v in discovered if v.variable_id == "var_productivity_gain")
+    assert v_prod.value_type == SimulationVariableType.PERCENTAGE
+    assert v_prod.baseline_value == 25.0
+    assert v_prod.minimum_value == 0.0
+    assert v_prod.maximum_value == 100.0
+    assert v_prod.minimum_value <= v_prod.baseline_value <= v_prod.maximum_value
+    assert v_prod.simulation_supported is True
+
+    # 4. 36 hours turnaround (uncontrollable external metric)
+    v_tat = next(v for v in discovered if v.variable_id == "var_reporting_turnaround")
+    assert v_tat.value_type == SimulationVariableType.COUNT
+    assert v_tat.baseline_value == 36.0
+    assert v_tat.minimum_value <= v_tat.baseline_value <= v_tat.maximum_value
+    assert v_tat.simulation_supported is False
+    assert "external environmental variable" in v_tat.support_reason.lower()
+
+
+def test_08_scale_contradiction_exclusion_with_diagnostic_reason():
+    """Verify that a variable with unit '%' but baseline 180,000:
+
+    1. Does NOT crash Pydantic validation.
+    2. Preserves the original baseline (180,000) and unit ('%') without clamping.
+    3. Is marked simulation_supported=False with an explicit diagnostic reason.
+    4. Satisfies minimum_value <= baseline_value <= maximum_value.
+    """
+    vars_list = [
+        Variable(
+            id="var_scan_demand_growth",
+            name="3-Year Scan Volume Growth",
+            description="Anticipated increase in radiology scan volume from baseline 180,000 scans.",
+            variable_type=VariableType.PERCENTAGE,
+            baseline_value=180000.0,
+            proposed_value=20.0,
+            unit="%",
+            is_controllable=True,
+        )
+    ]
+    dm = _build_test_decision_model(vars_list)
+    discovered = discover_simulation_variables(dm)
+
+    assert len(discovered) == 1
+    v = discovered[0]
+    assert v.baseline_value == 180000.0  # NOT clamped to 100
+    assert v.unit == "%"                 # Preserved
+    assert v.minimum_value <= v.baseline_value <= v.maximum_value
+    assert v.simulation_supported is False
+    assert "cannot be safely modeled" in v.support_reason.lower()
+    assert "exceeds realistic percentage bounds" in v.support_reason.lower()

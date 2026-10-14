@@ -1,0 +1,464 @@
+"use client";
+
+import React, { useState } from "react";
+import type { AnalysisResponse } from "@/types";
+import { DecisionModelSummary } from "../DecisionModelSummary";
+import { EvidenceOverview } from "../evidence/EvidenceOverview";
+import { RequirementList } from "../evidence/RequirementList";
+import { EvidenceGapsSection } from "../evidence/EvidenceGapsSection";
+import { SourceList } from "../evidence/SourceList";
+import { ReasoningBoardSection } from "../boardroom/ReasoningBoardSection";
+import { RecommendationDashboard } from "../recommendation/RecommendationDashboard";
+import { FutureExplorerDashboard } from "../scenario/FutureExplorerDashboard";
+import { ResilienceDashboard } from "../resilience/ResilienceDashboard";
+import { EvidenceQualityDistribution } from "../charts/EvidenceQualityDistribution";
+import { formatEnumLabel, formatProvenance } from "@/lib/formatters";
+
+interface DetailsViewProps {
+  result: AnalysisResponse;
+}
+
+export function DetailsView({ result }: DetailsViewProps) {
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    stage1: false,
+    stage2: false,
+    stage3: false,
+    stage4: false,
+    stage5: false,
+    stage6: false,
+    assumptions: true,
+    diagnostics: false,
+  });
+
+  const toggleSection = (key: string) => {
+    setOpenSections((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const expandAll = () => {
+    setOpenSections({
+      stage1: true,
+      stage2: true,
+      stage3: true,
+      stage4: true,
+      stage5: true,
+      stage6: true,
+      assumptions: true,
+      diagnostics: true,
+    });
+  };
+
+  const collapseAll = () => {
+    setOpenSections({
+      stage1: false,
+      stage2: false,
+      stage3: false,
+      stage4: false,
+      stage5: false,
+      stage6: false,
+      assumptions: false,
+      diagnostics: false,
+    });
+  };
+
+  const { decision_model, evidence_package, reasoning_board, recommendation, scenarios, resilience } = result;
+
+  const assumptions = decision_model?.assumptions || [];
+
+  return (
+    <div className="space-y-6" aria-label="Analytical Deep-Dive and Stage Artifacts">
+      {/* Header and Controls */}
+      <div className="rounded-2xl border border-zinc-800 bg-gradient-to-r from-zinc-950 via-zinc-900/40 to-zinc-950 p-6 space-y-3 text-zinc-100 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-800/80 pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-purple-400 font-semibold">
+                Epistemic Depth
+              </span>
+              <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+            </div>
+            <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight mt-0.5">
+              Full Six-Stage Analytical Artifacts &amp; Diagnostics
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-2 print:hidden">
+            <button
+              type="button"
+              onClick={expandAll}
+              className="rounded px-2.5 py-1 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors border border-zinc-700"
+            >
+              Expand All
+            </button>
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="rounded px-2.5 py-1 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors border border-zinc-700"
+            >
+              Collapse All
+            </button>
+          </div>
+        </div>
+
+        <p className="text-xs text-zinc-400 max-w-3xl font-sans leading-relaxed">
+          Complete, unsummarized audit trails across all six decision engine stages.
+          Inspect structured models, boardroom deliberations, evidence citations, assumption registries, and technical runtime metadata.
+        </p>
+      </div>
+
+      {/* Assumption Registry (Prominently featured) */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-4">
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => toggleSection("assumptions")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleSection("assumptions");
+            }
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="text-amber-400 font-bold font-mono text-sm">¶</span>
+            <h4 className="text-sm font-semibold text-white tracking-tight">
+              Assumption Registry ({assumptions.length} Modeled Assumptions)
+            </h4>
+          </div>
+          <span className="text-xs font-mono text-zinc-400">
+            {openSections.assumptions ? "▲ Collapse" : "▼ Expand"}
+          </span>
+        </div>
+
+        <div
+          className={`${openSections.assumptions ? "block" : "hidden print:block"} pt-2 border-t border-zinc-800/80 space-y-3`}
+        >
+          {assumptions.length === 0 ? (
+            <p className="text-xs text-zinc-500 italic">No explicit assumptions registered in the decision model.</p>
+          ) : (
+            <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-[10px] font-mono text-zinc-400 uppercase tracking-wider">
+                      <th className="py-2 px-3">Assumption Statement</th>
+                      <th className="py-2 px-3">Confidence</th>
+                      <th className="py-2 px-3">Provenance</th>
+                      <th className="py-2 px-3">Falsification Condition</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/60 font-sans text-zinc-300">
+                    {assumptions.map((a) => (
+                      <tr key={a.id} className="hover:bg-zinc-900/40">
+                        <td className="py-2.5 px-3 font-medium text-zinc-100 max-w-sm">
+                          {a.statement}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="inline-flex rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-300 border border-zinc-700">
+                            {formatEnumLabel(a.confidence)}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap text-[11px] font-mono text-zinc-400">
+                          {formatProvenance(a.provenance)}
+                        </td>
+                        <td className="py-2.5 px-3 text-[11px] text-zinc-400 italic">
+                          {a.falsification_condition || "Not explicitly specified"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+      {/* Stage 1: Structured Decision Model */}
+      {decision_model && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage1")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage1");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-indigo-400 font-semibold">Stage 1</span>
+              <h4 className="text-sm font-semibold text-white">Decision Framer &amp; Deconstruction Model</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage1 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            id="section-decision-model"
+            className={`${openSections.stage1 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <DecisionModelSummary model={decision_model} />
+          </div>
+        </div>
+      )}
+
+      {/* Stage 2: Evidence Package */}
+      {evidence_package && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage2")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage2");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-sky-400 font-semibold">Stage 2</span>
+              <h4 className="text-sm font-semibold text-white">Evidence Package &amp; Source Citations</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage2 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            id="section-evidence-engine"
+            className={`space-y-6 ${openSections.stage2 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <EvidenceQualityDistribution pkg={evidence_package} />
+            <EvidenceOverview pkg={evidence_package} />
+            <div id="section-evidence-requirements">
+              <RequirementList pkg={evidence_package} />
+            </div>
+            {evidence_package.gaps && evidence_package.gaps.length > 0 && (
+              <div id="section-evidence-gaps">
+                <EvidenceGapsSection
+                  gaps={evidence_package.gaps}
+                  items={evidence_package.items}
+                />
+              </div>
+            )}
+            {evidence_package.sources && evidence_package.sources.length > 0 && (
+              <div id="section-source-directory">
+                <SourceList sources={evidence_package.sources} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Stage 3: AI Boardroom Deliberation */}
+      {reasoning_board && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage3")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage3");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-purple-400 font-semibold">Stage 3</span>
+              <h4 className="text-sm font-semibold text-white">AI Boardroom Reasoning &amp; Transcripts</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage3 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            id="section-ai-boardroom"
+            className={`${openSections.stage3 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <ReasoningBoardSection
+              board={reasoning_board}
+              evidencePackage={evidence_package}
+              decisionModel={decision_model}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stage 4: Recommendation Dashboard */}
+      {recommendation && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage4")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage4");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-emerald-400 font-semibold">Stage 4</span>
+              <h4 className="text-sm font-semibold text-white">Executive Recommendation Deep Dive</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage4 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            className={`${openSections.stage4 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <RecommendationDashboard
+              recommendation={recommendation}
+              decisionModel={decision_model}
+              evidencePackage={evidence_package}
+              reasoningBoard={reasoning_board}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stage 5: Future Explorer Dashboard */}
+      {scenarios && scenarios.scenarios && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage5")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage5");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-sky-400 font-semibold">Stage 5</span>
+              <h4 className="text-sm font-semibold text-white">Future Explorer &amp; Trajectory Details</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage5 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            className={`${openSections.stage5 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <FutureExplorerDashboard
+              scenarioSet={scenarios}
+              decisionModel={decision_model}
+              evidencePackage={evidence_package}
+              decisionTitle={decision_model?.decision?.summary || result.question}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stage 6: Resilience Dashboard */}
+      {resilience && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+          <div
+            className="p-4 bg-zinc-900/50 flex items-center justify-between cursor-pointer border-b border-zinc-800/80"
+            onClick={() => toggleSection("stage6")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleSection("stage6");
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-indigo-400 font-semibold">Stage 6</span>
+              <h4 className="text-sm font-semibold text-white">Decision Resilience &amp; Stress Testing</h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              {openSections.stage6 ? "▲ Collapse" : "▼ Expand"}
+            </span>
+          </div>
+
+          <div
+            className={`${openSections.stage6 ? "block p-5" : "hidden print:block print:p-5"}`}
+          >
+            <ResilienceDashboard
+              report={resilience}
+              decisionModel={decision_model}
+              recommendation={recommendation}
+              scenarioSet={scenarios}
+              decisionTitle={decision_model?.decision?.summary || result.question}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Technical Diagnostics (Isolated here, hidden from default executive view) */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-4">
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => toggleSection("diagnostics")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleSection("diagnostics");
+            }
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 font-mono text-sm">#</span>
+            <h4 className="text-sm font-semibold text-zinc-200">
+              Technical Diagnostics &amp; Provenance Identifiers
+            </h4>
+          </div>
+          <span className="text-xs font-mono text-zinc-400">
+            {openSections.diagnostics ? "▲ Collapse" : "▼ Expand"}
+          </span>
+        </div>
+
+        <div
+          className={`${openSections.diagnostics ? "block" : "hidden print:block"} pt-3 border-t border-zinc-800/80 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono`}
+        >
+          <div className="p-2.5 rounded bg-zinc-900/60 border border-zinc-800 space-y-1">
+            <span className="text-[10px] uppercase text-zinc-500 block">Analysis Run ID:</span>
+            <span className="text-zinc-300 break-all select-all">{result.analysis_id}</span>
+          </div>
+          {recommendation && (
+            <div className="p-2.5 rounded bg-zinc-900/60 border border-zinc-800 space-y-1">
+              <span className="text-[10px] uppercase text-zinc-500 block">Recommendation ID:</span>
+              <span className="text-zinc-300 break-all select-all">{recommendation.id}</span>
+            </div>
+          )}
+          {decision_model && (
+            <div className="p-2.5 rounded bg-zinc-900/60 border border-zinc-800 space-y-1">
+              <span className="text-[10px] uppercase text-zinc-500 block">Decision Model ID:</span>
+              <span className="text-zinc-300 break-all select-all">{decision_model.id}</span>
+            </div>
+          )}
+          {resilience?.calculation_version && (
+            <div className="p-2.5 rounded bg-zinc-900/60 border border-zinc-800 space-y-1">
+              <span className="text-[10px] uppercase text-zinc-500 block">Resilience Engine Version:</span>
+              <span className="text-zinc-300">{resilience.calculation_version}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
