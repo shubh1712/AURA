@@ -500,3 +500,63 @@ def test_evidence_mapper_end_to_end_with_reconciled_finding():
     assert link.target_entity_id == "asm_elasticity"
     assert link.stance == EvidenceStance.SUPPORTS
     assert link.requirement_id == "req_1"
+
+def test_validation_retry_adds_safe_entity_id_feedback():
+    """A schema validation retry receives corrective feedback without leaking raw output."""
+    import json
+
+    original_prompt = "Evaluate evidence for SOURCE_1"
+    secret_marker = "PRIVATE_MODEL_OUTPUT_DO_NOT_REPEAT"
+    invalid_id = secret_marker + ("X" * 110)
+    requests_seen = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests_seen.append(body)
+
+        if len(requests_seen) == 1:
+            output = {
+                "findings": [{
+                    "source_ref": "SOURCE_1",
+                    "target_entity_id": invalid_id,
+                    "content": "An empirical finding from the source.",
+                    "stance": "supports",
+                    "reasoning": "The finding supports the assumption.",
+                }]
+            }
+        else:
+            output = {
+                "findings": [{
+                    "source_ref": "SOURCE_1",
+                    "target_entity_id": "asm_elasticity",
+                    "content": "An empirical finding from the source.",
+                    "stance": "supports",
+                    "reasoning": "The finding supports the assumption.",
+                }]
+            }
+
+        return httpx.Response(200, json={"output_text": json.dumps(output)})
+
+    client = GeminiLLMClient(
+        project="aura-test-project",
+        location="global",
+        http_client=httpx.Client(transport=httpx.MockTransport(mock_handler)),
+        sleep_fn=lambda seconds: None,
+    )
+
+    result = client.generate_structured(
+        prompt=original_prompt,
+        response_schema=CandidateBatchEvidenceMappingPayload,
+        config=LLMConfig(max_retries=2),
+    )
+
+    assert len(requests_seen) == 2
+    assert requests_seen[0]["input"] == original_prompt
+
+    retry_input = requests_seen[1]["input"]
+    assert original_prompt in retry_input
+    assert "target_entity_id" in retry_input
+    assert "100" in retry_input
+    assert secret_marker not in retry_input
+
+    assert result.findings[0].target_entity_id == "asm_elasticity"

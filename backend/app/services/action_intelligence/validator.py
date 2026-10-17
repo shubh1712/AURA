@@ -34,7 +34,73 @@ class ActionPlanValidationError(ValueError):
     """Raised when an IntelligentActionPlan violates structural or referential integrity invariants."""
     pass
 
+def validate_generated_text(value: Optional[str], field_name: str) -> None:
+    """Reject excessively long or obviously repetitive generated text."""
+    if not value:
+        return
 
+    # Short labels require tighter limits than explanatory prose.
+    if field_name.endswith(".timing"):
+        max_length = 160
+    elif field_name.endswith(".checkpoint"):
+        max_length = 240
+    elif field_name.endswith((".title", ".owner_role")):
+        max_length = 300
+    else:
+        max_length = 8000
+
+    if len(value) > max_length:
+        raise ActionPlanValidationError(
+            f"Generated text in '{field_name}' exceeds the "
+            f"{max_length}-character safety limit."
+        )
+
+    tokens = re.findall(r"\b[\w-]+\b", value.lower())
+
+    if len(tokens) >= 12:
+        for index in range(len(tokens) - 11):
+            if len(set(tokens[index:index + 12])) == 1:
+                raise ActionPlanValidationError(
+                    f"Generated text in '{field_name}' contains excessive repetition."
+                )
+
+    if len(tokens) >= 40:
+        for index in range(len(tokens) - 39):
+            window = tokens[index:index + 40]
+            if len(set(window)) <= 5:
+                raise ActionPlanValidationError(
+                    f"Generated text in '{field_name}' contains a repetitive token loop."
+                )
+    # Detect generated sequences such as week_1 week_2 ... week_100.
+    numbered_run = 0
+    previous_prefix = None
+    previous_number = None
+
+    for token in tokens:
+        match = re.fullmatch(r"([a-z][a-z0-9_]*)_(\d+)", token)
+
+        if match:
+            prefix = match.group(1)
+            number = int(match.group(2))
+
+            if prefix == previous_prefix and (
+                previous_number is not None and number == previous_number + 1
+            ):
+                numbered_run += 1
+            else:
+                numbered_run = 1
+
+            previous_prefix = prefix
+            previous_number = number
+        else:
+            numbered_run = 0
+            previous_prefix = None
+            previous_number = None
+
+        if numbered_run >= 12:
+            raise ActionPlanValidationError(
+                f"Generated text in '{field_name}' contains a repetitive numbered sequence."
+            )
 def validate_action_ids(actions: List[IntelligentActionItem]) -> None:
     """Verifies that all action IDs are unique and non-empty.
 
@@ -412,7 +478,67 @@ def validate_action_plan(
     """
     if not plan.actions:
         raise ActionPlanValidationError("IntelligentActionPlan must contain at least one action item.")
+    # Reject malformed generated prose before structural validation.
+    validate_generated_text(plan.strategy_summary, "strategy_summary")
 
+    for field_name in ("unresolved_questions", "limitations"):
+        for index, value in enumerate(getattr(plan, field_name, []) or []):
+            validate_generated_text(value, f"{field_name}[{index}]")
+
+    for action in plan.actions:
+        action_path = f"actions[{action.action_id}]"
+
+        for field_name in (
+            "title",
+            "description",
+            "owner_role",
+            "timing",
+            "rationale",
+            "confidence_rationale",
+            "contingency_or_rollback",
+        ):
+            validate_generated_text(
+                getattr(action, field_name, None),
+                f"{action_path}.{field_name}",
+            )
+
+        for field_name in (
+            "prerequisites",
+            "risk_mitigations",
+            "missing_information",
+        ):
+            for index, value in enumerate(getattr(action, field_name, []) or []):
+                validate_generated_text(
+                    value,
+                    f"{action_path}.{field_name}[{index}]",
+                )
+
+        for index, criterion in enumerate(action.success_criteria):
+            validate_generated_text(
+                criterion.description,
+                f"{action_path}.success_criteria[{index}].description",
+            )
+
+    for gate in plan.decision_gates:
+        gate_path = f"decision_gates[{gate.gate_id}]"
+
+        for field_name in ("title", "checkpoint", "failure_response"):
+            validate_generated_text(
+                getattr(gate, field_name, None),
+                f"{gate_path}.{field_name}",
+            )
+
+        for index, value in enumerate(gate.unresolved_conflicts):
+            validate_generated_text(
+                value,
+                f"{gate_path}.unresolved_conflicts[{index}]",
+            )
+
+        for index, criterion in enumerate(gate.criteria):
+            validate_generated_text(
+                criterion.description,
+                f"{gate_path}.criteria[{index}].description",
+            )
     # 1. Structural invariants
     validate_action_ids(plan.actions)
     validate_dependencies(plan.actions)

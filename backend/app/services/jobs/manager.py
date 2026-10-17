@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
+import uuid
 from fastapi import HTTPException, status
 
 from app.config import settings
@@ -21,7 +22,9 @@ from app.schemas.job import (
     PipelineStage,
 )
 from app.services.analysis_service import AnalysisService, get_analysis_service
-from app.services.jobs.storage import JobRecord, SQLiteJobStorage
+from app.services.jobs.base import JobRecord, JobStorageInterface
+from app.services.jobs.factory import get_job_storage
+from app.services.tasks.dispatcher import CloudTasksDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -31,36 +34,55 @@ class AnalysisJobManager:
 
     def __init__(
         self,
-        storage: Optional[SQLiteJobStorage] = None,
+        storage: Optional[JobStorageInterface] = None,
         service_factory: Optional[Callable[[], AnalysisService]] = None,
         max_workers: Optional[int] = None,
         default_timeout_seconds: Optional[float] = None,
+        execution_mode: Optional[str] = None,
+        dispatcher: Optional[CloudTasksDispatcher] = None,
+        lease_seconds: Optional[float] = None,
     ) -> None:
-        """Initializes job manager with storage and thread pool.
+        """Initializes job manager with storage and execution configuration.
 
         Args:
-            storage: Persistent SQLiteJobStorage instance (defaults to configured path).
+            storage: Persistent JobStorageInterface instance (defaults to configured storage factory).
             service_factory: Callable returning an AnalysisService instance.
             max_workers: Maximum concurrent jobs executing in worker pool.
             default_timeout_seconds: Default parent timeout for submitted jobs.
+            execution_mode: 'local' (thread pool) or 'cloud_tasks' (Google Cloud Tasks).
+            dispatcher: Optional CloudTasksDispatcher instance for enqueuing tasks.
+            lease_seconds: Duration of exclusive execution claim lease in seconds.
         """
-        db_path = getattr(settings, "AURA_JOBS_DB_PATH", "aura_jobs.db")
         self._owns_storage = storage is None
-        self.storage = storage or SQLiteJobStorage(db_path=db_path)
+        self.storage: JobStorageInterface = storage or get_job_storage()
         self.service_factory = service_factory or get_analysis_service
         self.max_workers = max_workers or getattr(settings, "AURA_MAX_JOB_WORKERS", 4)
         self.default_timeout_seconds = default_timeout_seconds or getattr(
             settings, "AURA_JOB_DEFAULT_TIMEOUT_SECONDS", 180.0
         )
+        self.execution_mode = (
+            execution_mode.strip().lower()
+            if execution_mode
+            else getattr(settings, "AURA_EXECUTION_MODE", "local").strip().lower()
+        )
+        self.lease_seconds = lease_seconds or getattr(settings, "AURA_JOB_LEASE_SECONDS", 300.0)
+        self._dispatcher = dispatcher
 
-        # Recover any orphaned jobs from prior process crash
+        # Recover any orphaned jobs from prior process crash (applies to local/SQLite)
         self.storage.recover_stale_jobs_on_startup()
 
-        # Bounded worker concurrency pool
+        # Bounded worker concurrency pool for local threaded execution
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_workers,
             thread_name_prefix="aura-job-worker",
         )
+
+    @property
+    def dispatcher(self) -> CloudTasksDispatcher:
+        """Lazily initializes and returns CloudTasksDispatcher."""
+        if self._dispatcher is None:
+            self._dispatcher = CloudTasksDispatcher(storage=self.storage)
+        return self._dispatcher
 
     def submit_job(self, request: AnalysisJobCreateRequest) -> AnalysisJobStatusResponse:
         """Enqueues an asynchronous analysis job for execution.
@@ -76,13 +98,30 @@ class AnalysisJobManager:
             default_timeout_seconds=self.default_timeout_seconds,
         )
 
-        # Dispatch execution to bounded worker thread pool
-        self._executor.submit(self._execute_job, job.job_id)
+        if self.execution_mode == "cloud_tasks":
+            try:
+                task_name = self.dispatcher.enqueue_analysis_job(job.job_id)
+                logger.info(
+                    "Job %s dispatched to Cloud Tasks: %s",
+                    job.job_id,
+                    task_name,
+                )
+            except Exception as exc:
+                # Never silently fall back to background threads if cloud dispatch fails
+                logger.error("Cloud Tasks dispatch failed for job %s: %s", job.job_id, exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Failed to enqueue analysis job in Cloud Tasks: {exc}",
+                ) from exc
+        else:
+            # Local threaded dispatch
+            self.storage.record_dispatch_status(job.job_id, dispatch_status="local")
+            self._executor.submit(self._execute_job, job.job_id)
 
         return self._record_to_response(job)
 
     def _execute_job(self, job_id: str) -> None:
-        """Worker task executing the analysis pipeline in a background thread."""
+        """Worker task executing the analysis pipeline in a local background thread."""
         job = self.storage.get_job(job_id)
         if not job or job.status != JobStatus.QUEUED:
             return
@@ -93,8 +132,103 @@ class AnalysisJobManager:
             stage=current_stage,
             message="Deconstructing decision problem (Decision Framer).",
         )
+        self._run_pipeline(job, attempt_id=job.attempt_id, fencing_token=job.fencing_token)
 
-        # Construct AnalysisService for this job
+    def execute_job_task(
+        self,
+        job_id: str,
+        attempt_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Executes an analysis job synchronously within an authenticated Cloud Tasks HTTP worker request.
+
+        Enforces lease ownership, fencing tokens, idempotency, and terminal failure states to prevent
+        duplicate or uncontrolled Gemini calls on at-least-once deliveries.
+        """
+        eff_attempt_id = attempt_id or str(uuid.uuid4())
+        acquired, claim_status, record = self.storage.acquire_job_execution_claim(
+            job_id=job_id,
+            attempt_id=eff_attempt_id,
+            lease_seconds=self.lease_seconds,
+        )
+
+        if not acquired:
+            if claim_status == "not_found":
+                logger.warning("Cloud Tasks worker received non-existent job_id: %s", job_id)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Analysis job '{job_id}' not found.",
+                )
+            if claim_status in ("already_completed", "already_terminal"):
+                logger.info(
+                    "Cloud Tasks duplicate acknowledged: job %s has already reached terminal status '%s'.",
+                    job_id,
+                    claim_status,
+                )
+                return {
+                    "status": claim_status,
+                    "terminal": True,
+                    "job_id": job_id,
+                    "message": "Job already reached terminal state; task acknowledged without re-execution.",
+                }
+            if claim_status == "ambiguous_failure":
+                logger.error(
+                    "Cloud Tasks worker attempt rejected for job %s: prior worker lease expired after provider execution started. "
+                    "Job marked FAILED for manual recovery to prevent duplicate Gemini invocations.",
+                    job_id,
+                )
+                return {
+                    "status": "failed",
+                    "terminal": True,
+                    "job_id": job_id,
+                    "message": "Prior worker lease expired after provider execution started; transitioned to failed for manual recovery.",
+                }
+            if claim_status == "concurrent_active":
+                logger.warning(
+                    "Cloud Tasks duplicate delivery ignored: job %s is active under another lease.",
+                    job_id,
+                )
+                return {
+                    "status": claim_status,
+                    "terminal": False,
+                    "job_id": job_id,
+                    "message": "Job is actively running under an active lease.",
+                }
+            logger.warning("Execution claim rejected for job %s with status %s", job_id, claim_status)
+            return {"status": claim_status, "terminal": False, "job_id": job_id}
+
+        # Claim acquired: execute pipeline synchronously within this HTTP worker request
+        logger.info(
+            "Acquired execution claim for job %s (attempt_id=%s, fencing_token=%d)",
+            job_id,
+            eff_attempt_id,
+            record.fencing_token,
+        )
+        self._run_pipeline(
+            record,
+            attempt_id=eff_attempt_id,
+            fencing_token=record.fencing_token,
+        )
+
+        final_job = self.storage.get_job(job_id)
+        final_status = final_job.status.value if final_job else "unknown"
+        return {
+            "status": final_status,
+            "terminal": True,
+            "job_id": job_id,
+            "fencing_token": record.fencing_token,
+        }
+
+    def _run_pipeline(
+        self,
+        job: JobRecord,
+        attempt_id: Optional[str] = None,
+        fencing_token: Optional[int] = None,
+    ) -> None:
+        """Executes the six-stage reasoning pipeline and persists terminal outcomes."""
+        job_id = job.job_id
+        eff_attempt_id = attempt_id or job.attempt_id
+        eff_fencing_token = fencing_token if fencing_token is not None else job.fencing_token
+        current_stage = PipelineStage.STAGE1_DECISION_FRAMER
         service = self.service_factory()
         if job.framer_timeout_seconds is not None:
             service.framer_operation_timeout_seconds = job.framer_timeout_seconds
@@ -137,7 +271,10 @@ class AnalysisJobManager:
                 current_stage.value,
                 elapsed,
             )
-            self.storage.update_stage(job_id, current_stage, msg)
+            try:
+                self.storage.update_stage(job_id, current_stage, msg, fencing_token=eff_fencing_token)
+            except TypeError:
+                self.storage.update_stage(job_id, current_stage, msg)
 
         try:
             analysis_req = AnalysisRequest(
@@ -145,6 +282,33 @@ class AnalysisJobManager:
                 context=job.request.context,
                 constraints=job.request.constraints,
             )
+            # Atomically verify active attempt, fencing token, RUNNING status, and lease before provider call
+            marker_ok = False
+            try:
+                marker_res = self.storage.mark_provider_execution_started(
+                    job_id,
+                    attempt_id=eff_attempt_id,
+                    fencing_token=eff_fencing_token,
+                )
+                marker_ok = (marker_res is True)
+            except Exception as marker_exc:
+                logger.error(
+                    "mark_provider_execution_started failed with exception for job %s: %s",
+                    job_id,
+                    marker_exc,
+                )
+                marker_ok = False
+
+            if not marker_ok:
+                err_msg = (
+                    f"Execution fence violation: claim for job {job_id} "
+                    f"(attempt={eff_attempt_id}, fencing_token={eff_fencing_token}) is stale, superseded, lease expired, "
+                    "or storage rejected provider boundary marker. "
+                    "Aborting before invoking provider to prevent duplicate/unauthorized execution."
+                )
+                logger.error(err_msg)
+                raise RuntimeError(err_msg)
+
             response = service.analyze(
                 request=analysis_req,
                 deadline_monotonic=deadline_monotonic,
@@ -161,7 +325,19 @@ class AnalysisJobManager:
                 completion_msg = "Analysis completed with Boardroom deliberation (recommendation stage unavailable)."
             else:
                 completion_msg = "Analysis completed with partial success."
-            self.storage.complete_job(job_id, response, message=completion_msg)
+            try:
+                self.storage.complete_job(
+                    job_id,
+                    response,
+                    message=completion_msg,
+                    fencing_token=eff_fencing_token,
+                )
+            except TypeError:
+                self.storage.complete_job(
+                    job_id,
+                    response,
+                    message=completion_msg,
+                )
             logger.info(
                 "Asynchronous analysis job %s completed in %.2fs (status: %s).",
                 job_id,
@@ -182,18 +358,35 @@ class AnalysisJobManager:
                 he.detail,
             )
             if he.status_code == status.HTTP_504_GATEWAY_TIMEOUT:
-                self.storage.timeout_job(
-                    job_id,
-                    error_message=str(he.detail),
-                    stage=current_stage,
-                )
+                try:
+                    self.storage.timeout_job(
+                        job_id,
+                        error_message=str(he.detail),
+                        stage=current_stage,
+                        fencing_token=eff_fencing_token,
+                    )
+                except TypeError:
+                    self.storage.timeout_job(
+                        job_id,
+                        error_message=str(he.detail),
+                        stage=current_stage,
+                    )
             else:
-                self.storage.fail_job(
-                    job_id,
-                    error_message=str(he.detail),
-                    error_status_code=he.status_code,
-                    stage=current_stage,
-                )
+                try:
+                    self.storage.fail_job(
+                        job_id,
+                        error_message=str(he.detail),
+                        error_status_code=he.status_code,
+                        stage=current_stage,
+                        fencing_token=eff_fencing_token,
+                    )
+                except TypeError:
+                    self.storage.fail_job(
+                        job_id,
+                        error_message=str(he.detail),
+                        error_status_code=he.status_code,
+                        stage=current_stage,
+                    )
 
         except Exception as exc:
             elapsed = time.monotonic() - t_start
@@ -206,12 +399,26 @@ class AnalysisJobManager:
                 remaining,
                 exc,
             )
-            self.storage.fail_job(
-                job_id,
-                error_message="Internal analysis execution failure.",
-                error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                stage=current_stage,
-            )
+            # If the failure was a fence violation from a stale worker, avoid overwriting storage
+            if "Execution fence violation" in str(exc):
+                logger.warning("Aborted execution without terminal write for superseded job %s", job_id)
+                return
+
+            try:
+                self.storage.fail_job(
+                    job_id,
+                    error_message="Internal analysis execution failure.",
+                    error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    stage=current_stage,
+                    fencing_token=eff_fencing_token,
+                )
+            except TypeError:
+                self.storage.fail_job(
+                    job_id,
+                    error_message="Internal analysis execution failure.",
+                    error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    stage=current_stage,
+                )
 
     def get_job_status(
         self,
@@ -315,6 +522,79 @@ class AnalysisJobManager:
             owner_id=job.owner_id,
             analysis_id=analysis_id,
         )
+
+    def reconcile_job_dispatch(
+        self,
+        job_id: str,
+        re_enqueue: bool = True,
+    ) -> Dict[str, Any]:
+        """Reconciles uncertain or pending Cloud Tasks dispatch for an analysis job.
+
+        Inspects Cloud Tasks using deterministic task naming. If the task exists in Cloud Tasks,
+        updates dispatch_status="enqueued". If absent and job is still QUEUED, safely re-enqueues
+        (if re_enqueue=True) or marks enqueue_failed.
+        """
+        job = self.storage.get_job(job_id)
+        if not job:
+            return {"status": "not_found", "job_id": job_id}
+
+        if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.TIMED_OUT):
+            return {
+                "status": "already_terminal",
+                "job_id": job_id,
+                "job_status": job.status.value,
+            }
+
+        if job.status == JobStatus.RUNNING:
+            return {
+                "status": "already_running",
+                "job_id": job_id,
+                "job_status": job.status.value,
+            }
+
+        try:
+            task = self.dispatcher.get_task(job_id)
+            if task is not None:
+                self.storage.record_dispatch_status(job_id, dispatch_status="enqueued")
+                return {
+                    "status": "reconciled_enqueued",
+                    "job_id": job_id,
+                    "message": "Task confirmed existing in Cloud Tasks.",
+                }
+        except Exception as exc:
+            logger.warning("Reconciliation lookup failed for job %s: %s", job_id, exc)
+            return {
+                "status": "still_uncertain",
+                "job_id": job_id,
+                "error": str(exc),
+            }
+
+        # Task definitely not in queue
+        if re_enqueue:
+            try:
+                task_name = self.dispatcher.enqueue_analysis_job(job_id)
+                return {
+                    "status": "reconciled_re_enqueued",
+                    "job_id": job_id,
+                    "task_name": task_name,
+                }
+            except Exception as exc:
+                return {
+                    "status": "re_enqueue_failed",
+                    "job_id": job_id,
+                    "error": str(exc),
+                }
+        else:
+            self.storage.record_dispatch_status(
+                job_id,
+                dispatch_status="enqueue_failed",
+                error_message="Reconciliation confirmed task was not created.",
+            )
+            return {
+                "status": "reconciled_failed",
+                "job_id": job_id,
+                "message": "Task confirmed absent and job marked failed.",
+            }
 
     def shutdown(self, wait: bool = True) -> None:
         """Gracefully shuts down worker thread pool and closes storage if owned."""

@@ -13,8 +13,7 @@ import {
 } from "@/types";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
 export function getApiBaseUrl(): string {
   return API_BASE_URL;
@@ -96,7 +95,8 @@ async function extractErrorInfo(res: Response): Promise<{
  */
 export async function checkHealth(): Promise<HealthResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/health`, {
+    const healthPath = API_BASE_URL ? "/health" : "/api/health";
+    const res = await fetch(`${API_BASE_URL}${healthPath}`, {
       method: "GET",
       headers: {
         Accept: "application/json",

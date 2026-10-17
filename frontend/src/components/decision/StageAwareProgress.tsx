@@ -83,6 +83,7 @@ export function StageAwareProgress({
   onRetry,
 }: StageAwareProgressProps) {
   const isError = status === "failed" || status === "timed_out" || Boolean(error);
+  const isComplete = status === "succeeded" && !isError;
   const currentStageIndex = stage ? (STAGE_ORDER[stage] ?? 0) : 0;
 
   return (
@@ -96,6 +97,8 @@ export function StageAwareProgress({
         <div className="flex items-center gap-2.5">
           {isError ? (
             <span className="flex h-3 w-3 rounded-full bg-red-400" />
+          ) : isComplete ? (
+            <span className="flex h-3 w-3 rounded-full bg-emerald-400" />
           ) : (
             <span className="flex h-3 w-3 rounded-full bg-indigo-400 animate-ping" />
           )}
@@ -104,7 +107,9 @@ export function StageAwareProgress({
               ? status === "timed_out"
                 ? "Analysis Timed Out"
                 : "Analysis Interrupted"
-              : "Analysis in Progress"}
+              : isComplete
+                ? "Analysis Complete"
+                : "Analysis in Progress"}
           </h3>
         </div>
 
@@ -155,8 +160,8 @@ export function StageAwareProgress({
         <div className="space-y-4">
           <ol className="space-y-3">
             {STAGES.map((step, idx) => {
-              const isPast = idx < currentStageIndex;
-              const isCurrent = idx === currentStageIndex;
+              const isPast = idx < currentStageIndex || (isComplete && idx === currentStageIndex);
+              const isCurrent = idx === currentStageIndex && !isComplete;
               const isPending = idx > currentStageIndex;
 
               return (
@@ -188,7 +193,7 @@ export function StageAwareProgress({
                     )}
 
                     {isCurrent && (
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500/20 border border-indigo-400">
+                      <span className={`flex h-5 w-5 items-center justify-center rounded-full border ${isComplete ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40" : "bg-indigo-500/20 border-indigo-400"}`}>
                         <svg
                           className="animate-spin h-3 w-3 text-indigo-400"
                           xmlns="http://www.w3.org/2000/svg"

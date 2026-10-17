@@ -6,6 +6,7 @@ from app.api.routes.analysis import router as analysis_router
 from app.api.routes.analysis_jobs import router as jobs_router
 from app.api.routes.simulation import router as simulation_router
 from app.api.routes.action_intelligence import router as action_intelligence_router
+from app.api.routes.internal_tasks import router as internal_tasks_router
 
 
 def create_application() -> FastAPI:
@@ -45,6 +46,9 @@ def create_application() -> FastAPI:
     # Day 8 Phase 8A Action Intelligence routes
     app.include_router(action_intelligence_router, prefix=settings.API_V1_STR)
     app.include_router(action_intelligence_router)
+    # Day 9 Phase 3 Cloud Tasks internal worker routes
+    app.include_router(internal_tasks_router, prefix=settings.API_V1_STR)
+    app.include_router(internal_tasks_router)
 
     return app
 

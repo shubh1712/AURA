@@ -16,6 +16,7 @@ import uuid
 
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse
 from app.schemas.job import AnalysisJobCreateRequest, JobStatus, PipelineStage
+from app.services.jobs.base import JobRecord, JobStorageInterface
 
 logger = logging.getLogger(__name__)
 
@@ -25,29 +26,7 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-@dataclass
-class JobRecord:
-    """In-memory representation of a persisted analysis job."""
-    job_id: str
-    status: JobStatus
-    stage: PipelineStage
-    request: AnalysisJobCreateRequest
-    response: Optional[AnalysisResponse]
-    error_message: Optional[str]
-    error_status_code: Optional[int]
-    owner_id: Optional[str]
-    created_at: str
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    timeout_seconds: float
-    framer_timeout_seconds: Optional[float]
-    boardroom_timeout_seconds: Optional[float]
-    recommendation_timeout_seconds: Optional[float]
-    scenario_timeout_seconds: Optional[float] = None
-    progress_message: str = ""
-
-
-class SQLiteJobStorage:
+class SQLiteJobStorage(JobStorageInterface):
     """Thread-safe SQLite storage for analysis jobs."""
 
     def __init__(self, db_path: str = "aura_jobs.db") -> None:
@@ -105,6 +84,36 @@ class SQLiteJobStorage:
                 pass
             try:
                 self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN scenario_timeout_seconds REAL;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN attempt_id TEXT;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN lease_expires_at REAL;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN fencing_token INTEGER DEFAULT 0;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN dispatch_status TEXT DEFAULT 'pending';")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN dispatch_error TEXT;")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                self._conn.execute("ALTER TABLE analysis_jobs ADD COLUMN provider_execution_started INTEGER DEFAULT 0;")
                 self._conn.commit()
             except sqlite3.OperationalError:
                 pass
@@ -301,9 +310,24 @@ class SQLiteJobStorage:
         job_id: str,
         stage: PipelineStage,
         message: str,
+        fencing_token: Optional[int] = None,
     ) -> None:
         """Updates pipeline stage and progress message while job remains RUNNING."""
         with self._lock:
+            if fencing_token is not None:
+                cur = self._conn.execute(
+                    "SELECT fencing_token FROM analysis_jobs WHERE job_id = ?;", (job_id,)
+                )
+                row = cur.fetchone()
+                if row and row["fencing_token"] is not None and row["fencing_token"] != fencing_token:
+                    logger.warning(
+                        "Fenced update_stage rejected for job %s: current token %s != caller %s",
+                        job_id,
+                        row["fencing_token"],
+                        fencing_token,
+                    )
+                    return
+
             self._conn.execute(
                 """
                 UPDATE analysis_jobs
@@ -324,11 +348,26 @@ class SQLiteJobStorage:
         job_id: str,
         response: AnalysisResponse,
         message: str = "Analysis completed successfully.",
+        fencing_token: Optional[int] = None,
     ) -> None:
         """Transitions job to SUCCEEDED status with full validated response payload."""
         completed_at = _utc_now_iso()
         resp_json = response.model_dump_json()
         with self._lock:
+            if fencing_token is not None:
+                cur = self._conn.execute(
+                    "SELECT fencing_token FROM analysis_jobs WHERE job_id = ?;", (job_id,)
+                )
+                row = cur.fetchone()
+                if row and row["fencing_token"] is not None and row["fencing_token"] != fencing_token:
+                    logger.warning(
+                        "Fenced complete_job rejected for job %s: current token %s != caller %s",
+                        job_id,
+                        row["fencing_token"],
+                        fencing_token,
+                    )
+                    return
+
             self._conn.execute(
                 """
                 UPDATE analysis_jobs
@@ -352,10 +391,25 @@ class SQLiteJobStorage:
         error_message: str,
         error_status_code: int = 500,
         stage: PipelineStage = PipelineStage.FAILED,
+        fencing_token: Optional[int] = None,
     ) -> None:
         """Transitions job to FAILED status with error details."""
         completed_at = _utc_now_iso()
         with self._lock:
+            if fencing_token is not None:
+                cur = self._conn.execute(
+                    "SELECT fencing_token FROM analysis_jobs WHERE job_id = ?;", (job_id,)
+                )
+                row = cur.fetchone()
+                if row and row["fencing_token"] is not None and row["fencing_token"] != fencing_token:
+                    logger.warning(
+                        "Fenced fail_job rejected for job %s: current token %s != caller %s",
+                        job_id,
+                        row["fencing_token"],
+                        fencing_token,
+                    )
+                    return
+
             self._conn.execute(
                 """
                 UPDATE analysis_jobs
@@ -380,10 +434,25 @@ class SQLiteJobStorage:
         job_id: str,
         error_message: str = "Decision analysis timed out while evaluating the inquiry.",
         stage: PipelineStage = PipelineStage.TIMED_OUT,
+        fencing_token: Optional[int] = None,
     ) -> None:
         """Transitions job to TIMED_OUT status."""
         completed_at = _utc_now_iso()
         with self._lock:
+            if fencing_token is not None:
+                cur = self._conn.execute(
+                    "SELECT fencing_token FROM analysis_jobs WHERE job_id = ?;", (job_id,)
+                )
+                row = cur.fetchone()
+                if row and row["fencing_token"] is not None and row["fencing_token"] != fencing_token:
+                    logger.warning(
+                        "Fenced timeout_job rejected for job %s: current token %s != caller %s",
+                        job_id,
+                        row["fencing_token"],
+                        fencing_token,
+                    )
+                    return
+
             self._conn.execute(
                 """
                 UPDATE analysis_jobs
@@ -400,6 +469,210 @@ class SQLiteJobStorage:
                     job_id,
                 ),
             )
+            self._conn.commit()
+
+    def acquire_job_execution_claim(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_seconds: float = 300.0,
+    ) -> Tuple[bool, str, Optional[JobRecord]]:
+        """Atomically acquires an execution claim for a job with fencing token in SQLite."""
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM analysis_jobs WHERE job_id = ?;", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                return False, "not_found", None
+
+            rec = self._row_to_record(row)
+            if rec.status == JobStatus.SUCCEEDED:
+                return False, "already_completed", rec
+            if rec.status in (JobStatus.FAILED, JobStatus.TIMED_OUT):
+                return False, "already_terminal", rec
+
+            curr_expires = float(rec.lease_expires_at or 0.0)
+            if rec.status == JobStatus.RUNNING and now < curr_expires and rec.attempt_id != attempt_id:
+                return False, "concurrent_active", rec
+
+            # Safety check: if lease expired after provider execution (e.g. Gemini) commenced,
+            # NEVER automatically restart to prevent duplicate paid provider invocations.
+            if rec.status == JobStatus.RUNNING and now >= curr_expires and rec.provider_execution_started:
+                err_msg = (
+                    "Ambiguous worker termination after provider execution started. "
+                    "Automatic restart prevented to avoid duplicate provider calls; manual recovery required."
+                )
+                completed_at = _utc_now_iso()
+                self._conn.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET status = ?, stage = ?, error_message = ?, error_status_code = 500,
+                        completed_at = ?, progress_message = ?
+                    WHERE job_id = ?;
+                    """,
+                    (
+                        JobStatus.FAILED.value,
+                        PipelineStage.FAILED.value,
+                        err_msg,
+                        completed_at,
+                        "Execution aborted: lease expired after provider invocation started.",
+                        job_id,
+                    ),
+                )
+                self._conn.commit()
+                cur2 = self._conn.execute("SELECT * FROM analysis_jobs WHERE job_id = ?;", (job_id,))
+                updated_row = cur2.fetchone()
+                return False, "ambiguous_failure", self._row_to_record(updated_row)
+
+            new_token = (rec.fencing_token or 0) + 1
+            new_expires = now + lease_seconds
+            started_at = rec.started_at or _utc_now_iso()
+
+            self._conn.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = ?, stage = ?, attempt_id = ?, lease_expires_at = ?,
+                    fencing_token = ?, started_at = ?, progress_message = ?
+                WHERE job_id = ?;
+                """,
+                (
+                    JobStatus.RUNNING.value,
+                    PipelineStage.STAGE1_DECISION_FRAMER.value,
+                    attempt_id,
+                    new_expires,
+                    new_token,
+                    started_at,
+                    "Execution started via worker.",
+                    job_id,
+                ),
+            )
+            self._conn.commit()
+
+            cur2 = self._conn.execute("SELECT * FROM analysis_jobs WHERE job_id = ?;", (job_id,))
+            updated_row = cur2.fetchone()
+            return True, "acquired", self._row_to_record(updated_row)
+
+    def mark_provider_execution_started(
+        self,
+        job_id: str,
+        attempt_id: Optional[str] = None,
+        fencing_token: Optional[int] = None,
+    ) -> bool:
+        """Atomically verifies active attempt, fencing token, RUNNING status, and unexpired lease before committing marker."""
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT status, attempt_id, fencing_token, lease_expires_at, provider_execution_started FROM analysis_jobs WHERE job_id = ?;",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                logger.warning("mark_provider_execution_started: job %s not found", job_id)
+                return False
+
+            status_val = row["status"]
+            curr_attempt = row["attempt_id"] if "attempt_id" in row.keys() else None
+            curr_token = row["fencing_token"] if "fencing_token" in row.keys() and row["fencing_token"] is not None else 0
+            curr_expires = float(row["lease_expires_at"]) if "lease_expires_at" in row.keys() and row["lease_expires_at"] is not None else None
+
+            # 1. Verify RUNNING status
+            if status_val != JobStatus.RUNNING.value:
+                logger.warning(
+                    "mark_provider_execution_started rejected for job %s: status '%s' is not RUNNING",
+                    job_id,
+                    status_val,
+                )
+                return False
+
+            # 2. Verify attempt_id matches active claim if specified
+            if attempt_id is not None and curr_attempt != attempt_id:
+                logger.warning(
+                    "mark_provider_execution_started rejected for job %s: attempt '%s' != active '%s'",
+                    job_id,
+                    attempt_id,
+                    curr_attempt,
+                )
+                return False
+
+            # 3. Verify fencing_token matches active claim if specified
+            if fencing_token is not None and curr_token != fencing_token:
+                logger.warning(
+                    "mark_provider_execution_started rejected for job %s: fencing token %d != active %d",
+                    job_id,
+                    fencing_token,
+                    curr_token,
+                )
+                return False
+
+            # 4. Verify lease is not expired if lease was established
+            if curr_expires is not None and now >= curr_expires:
+                logger.warning(
+                    "mark_provider_execution_started rejected for job %s: lease expired (now=%.2f, expires=%.2f)",
+                    job_id,
+                    now,
+                    curr_expires,
+                )
+                return False
+
+            self._conn.execute(
+                "UPDATE analysis_jobs SET provider_execution_started = 1 WHERE job_id = ?;",
+                (job_id,),
+            )
+            self._conn.commit()
+            return True
+
+    def record_dispatch_status(
+        self,
+        job_id: str,
+        dispatch_status: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Records the outcome of Cloud Tasks task dispatch in SQLite."""
+        with self._lock:
+            if dispatch_status == "enqueue_failed":
+                self._conn.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET dispatch_status = ?, dispatch_error = ?, status = ?,
+                        error_message = ?, error_status_code = 500, completed_at = ?,
+                        progress_message = ?
+                    WHERE job_id = ?;
+                    """,
+                    (
+                        dispatch_status,
+                        error_message,
+                        JobStatus.FAILED.value,
+                        error_message,
+                        _utc_now_iso(),
+                        f"Dispatch failed: {error_message}",
+                        job_id,
+                    ),
+                )
+            elif dispatch_status == "dispatch_uncertain":
+                # Do NOT mark terminal! Preserve QUEUED status so job can be reconciled.
+                self._conn.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET dispatch_status = ?, dispatch_error = ?,
+                        progress_message = ?
+                    WHERE job_id = ?;
+                    """,
+                    (
+                        dispatch_status,
+                        error_message,
+                        "Task dispatch status uncertain; reconciliation required.",
+                        job_id,
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    UPDATE analysis_jobs
+                    SET dispatch_status = ?, dispatch_error = ?
+                    WHERE job_id = ?;
+                    """,
+                    (dispatch_status, error_message, job_id),
+                )
             self._conn.commit()
 
     def recover_stale_jobs_on_startup(self) -> int:
@@ -500,6 +773,12 @@ class SQLiteJobStorage:
             recommendation_timeout_seconds=row["recommendation_timeout_seconds"] if "recommendation_timeout_seconds" in row.keys() else None,
             scenario_timeout_seconds=row["scenario_timeout_seconds"] if "scenario_timeout_seconds" in row.keys() else None,
             progress_message=row["progress_message"],
+            attempt_id=row["attempt_id"] if "attempt_id" in row.keys() else None,
+            lease_expires_at=row["lease_expires_at"] if "lease_expires_at" in row.keys() else None,
+            fencing_token=row["fencing_token"] if "fencing_token" in row.keys() and row["fencing_token"] is not None else 0,
+            dispatch_status=row["dispatch_status"] if "dispatch_status" in row.keys() and row["dispatch_status"] is not None else "pending",
+            dispatch_error=row["dispatch_error"] if "dispatch_error" in row.keys() else None,
+            provider_execution_started=bool(row["provider_execution_started"]) if "provider_execution_started" in row.keys() and row["provider_execution_started"] is not None else False,
         )
 
     def save_simulation(

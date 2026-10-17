@@ -988,3 +988,76 @@ def test_session_restoration_and_day7_whatif_compatibility(client, mock_storage)
     assert job_record.response.decision_model is not None
     assert job_record.response.evidence_package is not None
     assert job_record.response.recommendation is not None
+@pytest.mark.parametrize(
+    "text",
+    [
+        "immediate " * 50,
+        " ".join(f"week_{i}" for i in range(1, 101)),
+        " ".join(f"horizon_{i}" for i in range(1, 101)),
+        " ".join(f"pilot_checkpoint_{i}" for i in range(1, 101)),
+        " ".join(["immediate", "short_term", "checkpoint"] * 30),
+        "A" * 8001,
+    ],
+)
+def test_generated_action_text_rejects_degeneration(text):
+    """Reject malformed generated text without making LLM calls."""
+    from app.services.action_intelligence.validator import validate_generated_text
+
+    with pytest.raises(ActionPlanValidationError):
+        validate_generated_text(text, "test_field")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Months 1-3",
+        "Complete the pilot review in weeks 1-3.",
+        "week_1 week_2 week_3",
+        "Review customer feedback, validate costs, and prepare rollback.",
+    ],
+)
+def test_generated_action_text_accepts_normal_content(text):
+    """Accept concise, meaningful roadmap text."""
+    from app.services.action_intelligence.validator import validate_generated_text
+
+    validate_generated_text(text, "test_field")
+@pytest.mark.parametrize(
+    ("field_name", "limit"),
+    [
+        ("actions[act_test].timing", 160),
+        ("decision_gates[gate_test].checkpoint", 240),
+        ("actions[act_test].title", 300),
+    ],
+)
+def test_generated_action_text_enforces_field_limits(field_name, limit):
+    """Short roadmap fields must respect their character limits."""
+    from app.services.action_intelligence.validator import validate_generated_text
+
+    validate_generated_text("A" * limit, field_name)
+
+    with pytest.raises(ActionPlanValidationError, match="safety limit"):
+        validate_generated_text("A" * (limit + 1), field_name)
+
+
+def test_full_action_plan_validation_rejects_repetitive_timing():
+    """Malformed timing must be rejected by the master validator."""
+    candidate = MockGeminiClient().generate_structured("", None)
+
+    plan = ActionIntelligenceGenerator(MockGeminiClient()).assemble_plan(
+        candidate=candidate,
+        analysis_id="text-quality-test",
+        source_recommendation_fingerprint="srfp_" + "a" * 32,
+    )
+
+    malformed_action = plan.actions[0].model_copy(
+        update={"timing": " ".join(f"week_{i}" for i in range(1, 101))}
+    )
+    malformed_plan = plan.model_copy(
+        update={"actions": [malformed_action, *plan.actions[1:]]}
+    )
+
+    with pytest.raises(
+        ActionPlanValidationError,
+        match=r"Generated text in 'actions\[act_saas_pilot_item\]\.timing'",
+    ):
+        validate_action_plan(malformed_plan)

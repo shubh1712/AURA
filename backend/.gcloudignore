@@ -1,0 +1,50 @@
+# Google Cloud Buildpack ignore file for AURA Backend
+.gcloudignore
+.git
+.gitignore
+
+# Environment variables and secrets
+.env
+.env.*
+.env.local
+!.env.example
+
+# Local SQLite databases and write-ahead logs
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+aura_jobs.db
+live_phase441_jobs.db
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test and lint caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Development scratch directories
+scratch/
+
+
+
+# Tests and local development utilities
+tests/
+pytest.ini
+run_mock_server.py
+run_single_live_job.py 

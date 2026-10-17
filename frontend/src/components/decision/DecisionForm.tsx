@@ -212,7 +212,7 @@ export function DecisionForm({
       </div>
 
       {/* Stage-Aware Progress & Error Callout */}
-      {(isLoading || jobStatus === "failed" || jobStatus === "timed_out") && (
+      {(isLoading || jobStatus === "succeeded" || jobStatus === "failed" || jobStatus === "timed_out") && (
         <StageAwareProgress
           status={jobStatus ?? (isLoading ? "running" : null)}
           stage={pipelineStage ?? null}

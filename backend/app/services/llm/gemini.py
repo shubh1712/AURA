@@ -846,6 +846,25 @@ class GeminiLLMClient(LLMClient):
                 )
 
                 if attempts < max_attempts and (deadline - time.monotonic()) > 0:
+                    # Use only known schema metadata, never rejected model output.
+                    # Keep feedback narrowly scoped to the observed entity-ID error.
+                    has_oversized_entity_id = any(
+                        isinstance(item, dict)
+                        and item.get("field") == "findings.0.target_entity_id"
+                        and item.get("type") == "string_too_long"
+                        and item.get("max_length") == 100
+                        for item in constraints_list
+                    )
+                    if has_oversized_entity_id:
+                        create_kwargs["input"] = (
+                            prompt
+                            + "\n\nCORRECTION FOR RETRY: The previous structured response "
+                            "failed schema validation because findings.0.target_entity_id "
+                            "exceeded 100 characters. For each finding, use only the exact "
+                            "canonical target entity ID supplied in the original prompt, "
+                            "or JSON null if no unambiguous ID applies. Never include "
+                            "descriptions, composite IDs, invented IDs, or truncated IDs."
+                        )
                     sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
                     if att_rec is not None:
                         att_rec["backoff_seconds"] = sleep_dur

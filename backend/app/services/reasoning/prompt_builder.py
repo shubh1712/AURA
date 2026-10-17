@@ -366,6 +366,7 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         "   - Copy exact canonical IDs only. NEVER append explanatory text, prose, notes, commentary, or punctuation (e.g. NEVER write 'unk_hallucination_severity them' or 'asm_pricing (unvalidated)'). Each array element must contain exactly one raw canonical ID string.\n"
         "   - evidence_item_ids: Reference ONLY Evidence Item IDs from === EVIDENCE ITEMS === (must start with 'evi_'). NEVER cite Source IDs ('src_...').\n"
         "   - requirement_ids: Reference ONLY Requirement IDs from === EVIDENCE REQUIREMENTS === (must start with 'req_'). Use this for requirements linked to cited evidence items OR when analyzing unfulfilled/pending requirements as unresolved dependencies. NEVER place 'req_...' in unknown_ids.\n"
+        "   - REQUIREMENT LINEAGE INTEGRITY (MANDATORY): If an argument contains both evidence_item_ids and requirement_ids, EVERY cited evidence item that has linked requirements MUST share at least one of those requirements with the argument's requirement_ids. Verify this using the 'Requirements' field in === EVIDENCE ITEMS === and the 'Requirement Lineage' field in === CLAIM EVIDENCE LINKS ===. Never cite an evidence item alongside only unrelated requirements. If discussing a separate pending or unresolved requirement, create a separate argument without the unrelated evidence citation. Do not invent, substitute, or silently change IDs to force a match.\n"
         "   - assumption_ids: Reference ONLY Assumption IDs from === ASSUMPTIONS === (must start with 'asm_').\n"
         "   - unknown_ids: Reference ONLY Unknown IDs from === UNKNOWNS === (must start with 'unk_'). NEVER place Requirement IDs ('req_...') or Gap IDs ('gap_...') in unknown_ids.\n"
         "   - evidence_gap_ids: Reference ONLY Gap IDs from === EVIDENCE GAPS & CONTRADICTIONS === (must start with 'gap_').\n"
@@ -374,6 +375,7 @@ def build_perspective_prompt(context: PerspectiveContext) -> PerspectivePrompt:
         "6. Explicitly cite any critical assumptions, evidence gaps, unresolved questions, and analytical limitations.\n"
         "7. Do NOT make a final recommendation, declare a vote, calculate a score, or formulate scenarios."
     )
+
 
     user_prompt = "\n\n".join(sections)
 

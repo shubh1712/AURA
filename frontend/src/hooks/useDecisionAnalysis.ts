@@ -47,8 +47,8 @@ const INITIAL_FORM_DATA: DecisionFormData = {
   constraints: "",
 };
 
-const POLLING_INTERVAL_MS = 1500;
-const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+const POLLING_INTERVAL_MS = 5000;
+const MAX_POLL_BACKOFF_MS = 60000;
 
 /**
  * Reusable React hook for managing decision intake, validation,
@@ -178,19 +178,44 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
               });
             }
           } catch (resErr) {
-            if (activeJobIdRef.current === targetJobId) {
-              const errMsg =
-                resErr instanceof ApiClientError
-                  ? resErr.message
-                  : "Failed to retrieve completed analysis result.";
-              const errCode =
-                resErr instanceof ApiClientError ? resErr.statusCode ?? 500 : 500;
-              setApiError(errMsg);
-              setApiErrorStatusCode(errCode);
-              setStatus("error");
-              setIsLoading(false);
-              isSubmittingRef.current = false;
+            if (activeJobIdRef.current !== targetJobId) {
+              return;
             }
+
+            const statusCode =
+              resErr instanceof ApiClientError ? resErr.statusCode : undefined;
+            const isTransient =
+              statusCode === undefined ||
+              statusCode === 408 ||
+              statusCode === 429 ||
+              (statusCode >= 500 && statusCode <= 599);
+
+            if (isTransient) {
+              consecutiveFailuresRef.current += 1;
+              const backoffMs = Math.min(
+                POLLING_INTERVAL_MS * 2 ** Math.min(consecutiveFailuresRef.current, 10),
+                MAX_POLL_BACKOFF_MS
+              );
+
+              setProgressMessage(
+                "Analysis completed. Waiting to retrieve results..."
+              );
+
+              pollTimerRef.current = setTimeout(() => {
+                pollJobStatusRef.current?.(targetJobId);
+              }, backoffMs);
+              return;
+            }
+
+            setApiError(
+              resErr instanceof ApiClientError
+                ? resErr.message
+                : "Failed to retrieve completed analysis result."
+            );
+            setApiErrorStatusCode(statusCode ?? null);
+            setStatus("error");
+            setIsLoading(false);
+            isSubmittingRef.current = false;
           }
           return;
         }
@@ -199,7 +224,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
           // Terminal Timeout (HTTP 504)
           setApiError(
             jobStatusResp.error ||
-              "The decision analysis exceeded its allowed processing time."
+            "The decision analysis exceeded its allowed processing time."
           );
           setApiErrorStatusCode(504);
           setStatus("error");
@@ -212,7 +237,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
           // Terminal Failure
           setApiError(
             jobStatusResp.error ||
-              "An error occurred while evaluating the decision inquiry."
+            "An error occurred while evaluating the decision inquiry."
           );
           setApiErrorStatusCode(jobStatusResp.error_status_code || 500);
           setStatus("error");
@@ -232,26 +257,41 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
           return;
         }
 
-        consecutiveFailuresRef.current += 1;
-        if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_POLL_FAILURES) {
+        const statusCode =
+          pollErr instanceof ApiClientError ? pollErr.statusCode : undefined;
+        const isTransient =
+          statusCode === undefined ||
+          statusCode === 408 ||
+          statusCode === 429 ||
+          (statusCode >= 500 && statusCode <= 599);
+
+        if (!isTransient) {
           const errMsg =
             pollErr instanceof ApiClientError
               ? pollErr.message
-              : "Lost communication with the analysis service.";
-          const errCode =
-            pollErr instanceof ApiClientError ? pollErr.statusCode ?? null : null;
+              : "Unable to retrieve analysis status.";
           setApiError(errMsg);
-          setApiErrorStatusCode(errCode);
+          setApiErrorStatusCode(statusCode ?? null);
           setStatus("error");
           setIsLoading(false);
           isSubmittingRef.current = false;
           return;
         }
 
-        // Retry polling after standard interval on transient poll network glitch
+        consecutiveFailuresRef.current += 1;
+        const backoffMs = Math.min(
+          POLLING_INTERVAL_MS * 2 ** Math.min(consecutiveFailuresRef.current, 10),
+          MAX_POLL_BACKOFF_MS
+        );
+
+        // Preserve progress while temporarily unable to contact the backend.
+        setProgressMessage(
+          "Connection temporarily interrupted. Retrying analysis status..."
+        );
+
         pollTimerRef.current = setTimeout(() => {
           pollJobStatusRef.current?.(targetJobId);
-        }, POLLING_INTERVAL_MS);
+        }, backoffMs);
       }
     },
     [ownerId]
@@ -414,9 +454,9 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
     const rawConstraints = formData.constraints.trim();
     const constraintsList = rawConstraints
       ? rawConstraints
-          .split(/\r?\n|,/)
-          .map((c) => c.trim())
-          .filter((c) => c.length > 0)
+        .split(/\r?\n|,/)
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0)
       : [];
 
     const trimmedContext = formData.context.trim();
