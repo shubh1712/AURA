@@ -11,6 +11,7 @@ interface StageAwareProgressProps {
   error?: string | null;
   errorStatusCode?: number | null;
   onRetry?: () => void;
+  onStop?: () => void;
 }
 
 interface StageStep {
@@ -81,6 +82,7 @@ export function StageAwareProgress({
   error,
   errorStatusCode,
   onRetry,
+  onStop,
 }: StageAwareProgressProps) {
   const isError = status === "failed" || status === "timed_out" || Boolean(error);
   const isComplete = status === "succeeded" && !isError;
@@ -113,14 +115,29 @@ export function StageAwareProgress({
           </h3>
         </div>
 
-        {jobId && (
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-zinc-400">Job:</span>
-            <code className="text-[11px] font-mono text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 break-all">
-              {jobId}
-            </code>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {!isError && !isComplete && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-rose-800/60 bg-rose-950/40 text-rose-300 hover:bg-rose-900/60 hover:text-white transition-colors cursor-pointer shadow-sm active:scale-95"
+              aria-label="Stop Analyzing"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+              <span>Stop Analyzing</span>
+            </button>
+          )}
+          {jobId && (
+            <div className="hidden sm:flex items-center gap-2">
+              <span className="text-[11px] font-mono text-zinc-400">Job:</span>
+              <code className="text-[11px] font-mono text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 break-all">
+                {jobId}
+              </code>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Error Presentation */}

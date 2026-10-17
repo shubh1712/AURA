@@ -38,6 +38,7 @@ export interface UseDecisionAnalysisReturn {
   reset: () => void;
   clearError: () => void;
   submitAnalysis: () => Promise<boolean>;
+  stopAnalysis: () => void;
   retryRestoration: () => Promise<void>;
 }
 
@@ -74,7 +75,9 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const consecutiveFailuresRef = useRef<number>(0);
-  const pollJobStatusRef = useRef<((targetJobId: string) => Promise<void>) | null>(null);
+  const pollJobStatusRef = useRef<((targetJobId: string, expectedRunId: number) => Promise<void>) | null>(null);
+  const runIdRef = useRef<number>(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const clearPollingTimer = useCallback(() => {
     if (pollTimerRef.current) {
@@ -83,9 +86,14 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
     }
   }, []);
 
-  // Cleanup polling timer on component unmount
+  // Cleanup polling timer and abort controller on unmount
   useEffect(() => {
     return () => {
+      runIdRef.current += 1;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
       activeJobIdRef.current = null;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
@@ -115,7 +123,42 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
     setApiErrorStatusCode(null);
   }, []);
 
+  const stopAnalysis = useCallback(() => {
+    // 1. Advance run counter to invalidate pending asynchronous responses or poll cycles
+    runIdRef.current += 1;
+
+    // 2. Abort active in-flight fetch request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // 3. Stop timer and clear active stored session so refreshes do not reconnect to cancelled job
+    clearPollingTimer();
+    clearActiveSession();
+
+    // 4. Detach job tracking
+    activeJobIdRef.current = null;
+    isSubmittingRef.current = false;
+
+    // 5. Restore user to original editable decision form while preserving formData & any previous results
+    setIsLoading(false);
+    setStatus("idle");
+    setJobId(null);
+    setJobStatus(null);
+    setPipelineStage(null);
+    setProgressMessage(null);
+    setValidationError(null);
+    setApiError(null);
+    setApiErrorStatusCode(null);
+  }, [clearPollingTimer]);
+
   const reset = useCallback(() => {
+    runIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     clearActiveSession();
     activeJobIdRef.current = null;
     isSubmittingRef.current = false;
@@ -140,16 +183,20 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
    * until termination state is reached.
    */
   const pollJobStatus = useCallback(
-    async (targetJobId: string) => {
-      if (activeJobIdRef.current !== targetJobId) {
+    async (targetJobId: string, expectedRunId: number) => {
+      if (activeJobIdRef.current !== targetJobId || runIdRef.current !== expectedRunId) {
         return;
       }
 
       try {
-        const jobStatusResp = await getAnalysisJobStatus(targetJobId, ownerId);
+        const jobStatusResp = await getAnalysisJobStatus(
+          targetJobId,
+          ownerId,
+          abortControllerRef.current?.signal
+        );
 
-        // Discard response if user reset or started a new job
-        if (activeJobIdRef.current !== targetJobId) {
+        // Discard response if user stopped, reset, or started a new job
+        if (activeJobIdRef.current !== targetJobId || runIdRef.current !== expectedRunId) {
           return;
         }
 
@@ -163,8 +210,12 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
         if (jobStatusResp.status === "succeeded") {
           // Terminal Success: Retrieve full validated AnalysisResponse
           try {
-            const finalResult = await getAnalysisJobResult(targetJobId, ownerId);
-            if (activeJobIdRef.current === targetJobId) {
+            const finalResult = await getAnalysisJobResult(
+              targetJobId,
+              ownerId,
+              abortControllerRef.current?.signal
+            );
+            if (activeJobIdRef.current === targetJobId && runIdRef.current === expectedRunId) {
               setApiResponse(finalResult);
               setStatus("completed");
               setIsLoading(false);
@@ -202,7 +253,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
               );
 
               pollTimerRef.current = setTimeout(() => {
-                pollJobStatusRef.current?.(targetJobId);
+                pollJobStatusRef.current?.(targetJobId, expectedRunId);
               }, backoffMs);
               return;
             }
@@ -247,13 +298,16 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
         }
 
         // Job is still queued or running -> schedule next poll cycle
-        if (activeJobIdRef.current === targetJobId) {
+        if (activeJobIdRef.current === targetJobId && runIdRef.current === expectedRunId) {
           pollTimerRef.current = setTimeout(() => {
-            pollJobStatusRef.current?.(targetJobId);
+            pollJobStatusRef.current?.(targetJobId, expectedRunId);
           }, POLLING_INTERVAL_MS);
         }
       } catch (pollErr) {
-        if (activeJobIdRef.current !== targetJobId) {
+        if (activeJobIdRef.current !== targetJobId || runIdRef.current !== expectedRunId) {
+          return;
+        }
+        if (pollErr instanceof Error && pollErr.name === "AbortError") {
           return;
         }
 
@@ -290,7 +344,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
         );
 
         pollTimerRef.current = setTimeout(() => {
-          pollJobStatusRef.current?.(targetJobId);
+          pollJobStatusRef.current?.(targetJobId, expectedRunId);
         }, backoffMs);
       }
     },
@@ -354,7 +408,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
         setStatus("submitting");
 
         pollTimerRef.current = setTimeout(() => {
-          pollJobStatusRef.current?.(canonicalJobId);
+          pollJobStatusRef.current?.(canonicalJobId, runIdRef.current);
         }, POLLING_INTERVAL_MS);
       } else if (statusResp.status === "timed_out") {
         setApiError(
@@ -438,6 +492,13 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
       return false;
     }
 
+    const currentRunId = ++runIdRef.current;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     isSubmittingRef.current = true;
     clearPollingTimer();
     setValidationError(null);
@@ -470,8 +531,13 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
           context: contextPayload,
           constraints: constraintsList,
         },
-        ownerId
+        ownerId,
+        abortController.signal
       );
+
+      if (runIdRef.current !== currentRunId) {
+        return false;
+      }
 
       const newJobId = jobResponse.job_id;
       activeJobIdRef.current = newJobId;
@@ -490,11 +556,14 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
 
       // Step 2: Begin bounded polling cycle
       pollTimerRef.current = setTimeout(() => {
-        pollJobStatusRef.current?.(newJobId);
+        pollJobStatusRef.current?.(newJobId, currentRunId);
       }, POLLING_INTERVAL_MS);
 
       return true;
     } catch (error) {
+      if (runIdRef.current !== currentRunId || (error instanceof Error && error.name === "AbortError")) {
+        return false;
+      }
       const errorMessage =
         error instanceof ApiClientError
           ? error.message
@@ -531,6 +600,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
     reset,
     clearError,
     submitAnalysis,
+    stopAnalysis,
     retryRestoration: restoreSession,
   };
 }

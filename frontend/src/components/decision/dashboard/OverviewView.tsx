@@ -9,6 +9,7 @@ import {
 } from "@/lib/formatters";
 import { FeasibilityTargetChart } from "../charts/FeasibilityTargetChart";
 import { AlternativesComparisonMatrix } from "../charts/AlternativesComparisonMatrix";
+import { BoardroomAlignmentGauge } from "../charts/BoardroomAlignmentGauge";
 import { getStatusConfig } from "@/lib/recommendationHelpers";
 
 interface OverviewViewProps {
@@ -179,10 +180,15 @@ export function OverviewView({
         </div>
       )}
 
-      {/* 3. Quantitative & Financial Feasibility (Only where supported!) */}
+      {/* 3. AI Boardroom Consensus & Alignment Gauge (Multi-Perspective Deliberation) */}
+      {result.reasoning_board && (
+        <BoardroomAlignmentGauge board={result.reasoning_board} />
+      )}
+
+      {/* 4. Quantitative & Financial Feasibility (Only where supported!) */}
       <FeasibilityTargetChart decisionModel={decision_model} />
 
-      {/* 4. Comparison of Viable Alternatives (Comparison Matrix) */}
+      {/* 5. Comparison of Viable Alternatives (Comparison Matrix) */}
       {alternatives.length > 0 && (
         <AlternativesComparisonMatrix
           primaryAction={conciseRecommendation}
@@ -258,6 +264,41 @@ export function OverviewView({
           )}
         </div>
       </div>
+
+      {/* 6. Action Intelligence & Execution Roadmap Shortcut */}
+      {onActionClick && (
+        <section
+          aria-label="Action Intelligence Discovery"
+          className="rounded-2xl border border-emerald-900/40 bg-gradient-to-r from-emerald-950/25 via-zinc-950 to-zinc-950 p-6 sm:p-7 text-zinc-100 shadow-sm transition-all hover:border-emerald-700/60"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5">
+            <div className="space-y-2 max-w-2xl">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded">
+                  Action Intelligence
+                </span>
+                <span className="text-xs text-zinc-400">Execution Framework</span>
+              </div>
+              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                Turn Recommendation Into a Grounded Execution Roadmap
+              </h3>
+              <p className="text-xs text-zinc-300 font-sans leading-relaxed">
+                Explore chronological action sequences, operational owners, validation checkpoints, and pre-computed decision gates to execute this choice safely.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={onActionClick}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 px-5 py-3 text-xs font-semibold text-zinc-950 transition-colors cursor-pointer shrink-0 shadow-md font-sans"
+              aria-label="Navigate to Action Plan tab"
+            >
+              <span>Open Action Plan &amp; Roadmap</span>
+              <span className="text-sm font-bold">&rarr;</span>
+            </button>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

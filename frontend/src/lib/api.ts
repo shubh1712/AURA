@@ -13,7 +13,11 @@ import {
 } from "@/types";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
+  process.env.NEXT_PUBLIC_API_BASE_URL !== undefined
+    ? process.env.NEXT_PUBLIC_API_BASE_URL.replace(/\/$/, "")
+    : typeof window === "undefined"
+    ? "http://127.0.0.1:8000"
+    : "";
 
 export function getApiBaseUrl(): string {
   return API_BASE_URL;
@@ -112,6 +116,9 @@ export async function checkHealth(): Promise<HealthResponse> {
 
     return await res.json();
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -166,6 +173,9 @@ export async function analyzeDecision(
 
     return data as AnalysisResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -184,7 +194,8 @@ export async function analyzeDecision(
  */
 export async function createAnalysisJob(
   payload: AnalysisJobCreateRequest,
-  ownerId?: string | null
+  ownerId?: string | null,
+  signal?: AbortSignal
 ): Promise<AnalysisJobStatusResponse> {
   const url = `${API_BASE_URL}/api/analysis/jobs`;
   const headers: Record<string, string> = {
@@ -201,6 +212,7 @@ export async function createAnalysisJob(
       method: "POST",
       headers,
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (!res.ok) {
@@ -226,6 +238,9 @@ export async function createAnalysisJob(
 
     return data as AnalysisJobStatusResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -244,7 +259,8 @@ export async function createAnalysisJob(
  */
 export async function getAnalysisJobStatus(
   jobId: string,
-  ownerId?: string | null
+  ownerId?: string | null,
+  signal?: AbortSignal
 ): Promise<AnalysisJobStatusResponse> {
   let url = `${API_BASE_URL}/api/analysis/jobs/${encodeURIComponent(jobId)}`;
   if (ownerId) {
@@ -261,6 +277,7 @@ export async function getAnalysisJobStatus(
     const res = await fetch(url, {
       method: "GET",
       headers,
+      signal,
     });
 
     if (!res.ok) {
@@ -286,6 +303,9 @@ export async function getAnalysisJobStatus(
 
     return data as AnalysisJobStatusResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -304,7 +324,8 @@ export async function getAnalysisJobStatus(
  */
 export async function getAnalysisJobResult(
   jobId: string,
-  ownerId?: string | null
+  ownerId?: string | null,
+  signal?: AbortSignal
 ): Promise<AnalysisResponse> {
   let url = `${API_BASE_URL}/api/analysis/jobs/${encodeURIComponent(jobId)}/result`;
   if (ownerId) {
@@ -321,6 +342,7 @@ export async function getAnalysisJobResult(
     const res = await fetch(url, {
       method: "GET",
       headers,
+      signal,
     });
 
     if (!res.ok) {
@@ -346,6 +368,9 @@ export async function getAnalysisJobResult(
 
     return data as AnalysisResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -396,6 +421,9 @@ export async function getSimulationVariables(
 
     return data as SimulationVariableDiscoveryResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -449,6 +477,9 @@ export async function runSimulation(
 
     return data as SimulationResult;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -499,6 +530,9 @@ export async function listSimulations(
 
     return data as SimulationListResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -550,6 +584,9 @@ export async function getSimulationById(
 
     return data as SimulationResult;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -601,6 +638,9 @@ export async function explainSimulation(
 
     return data as SimulationExplanationResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -734,6 +774,9 @@ export async function getActionPlanStatus(
     const data = await res.json();
     return data as ActionPlanResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }
@@ -779,6 +822,9 @@ export async function generateActionPlan(
     const data = await res.json();
     return data as ActionPlanResponse;
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
     if (error instanceof ApiClientError) {
       throw error;
     }

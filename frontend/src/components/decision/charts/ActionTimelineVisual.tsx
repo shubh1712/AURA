@@ -28,6 +28,23 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
     actionMap.set(id, a);
   });
 
+  // Calculate priority & dependency breakdown for visual strip
+  const priorityCounts = actions.reduce(
+    (acc, a) => {
+      const p = (a.priority || "medium").toLowerCase();
+      if (p === "critical") acc.critical++;
+      else if (p === "high") acc.high++;
+      else if (p === "medium") acc.medium++;
+      else acc.low++;
+      return acc;
+    },
+    { critical: 0, high: 0, medium: 0, low: 0 }
+  );
+
+  const totalActions = actions.length;
+  const criticalHighCount = priorityCounts.critical + priorityCounts.high;
+  const totalDepsCount = actions.reduce((acc, a) => acc + (a.dependencies?.length || 0), 0);
+
   return (
     <div
       className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-4"
@@ -43,9 +60,79 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
             Sequential Timeline &amp; Dependency Flow
           </h4>
         </div>
-        <span className="text-[11px] font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
-          {actions.length} Sequenced Actions
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-mono text-zinc-300 bg-zinc-900 px-2.5 py-0.5 rounded border border-zinc-800">
+            {actions.length} Sequenced Actions
+          </span>
+          {totalDepsCount > 0 && (
+            <span className="text-[11px] font-mono text-sky-300 bg-sky-950/40 px-2 py-0.5 rounded border border-sky-800/60">
+              {totalDepsCount} Dependencies Mapped
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Execution Priority Distribution Strip */}
+      <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/30 p-3 space-y-2 text-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-[11px] font-mono">
+          <span className="text-zinc-400">
+            Execution Priority Load:{" "}
+            <strong className={criticalHighCount > 0 ? "text-amber-300" : "text-emerald-300"}>
+              {criticalHighCount} High/Critical
+            </strong>{" "}
+            of {totalActions} actions
+          </span>
+          <div className="flex items-center gap-2 text-[10px]">
+            {priorityCounts.critical > 0 && (
+              <span className="text-rose-400">● {priorityCounts.critical} Critical</span>
+            )}
+            {priorityCounts.high > 0 && (
+              <span className="text-orange-400">● {priorityCounts.high} High</span>
+            )}
+            {priorityCounts.medium > 0 && (
+              <span className="text-amber-400">● {priorityCounts.medium} Medium</span>
+            )}
+            {priorityCounts.low > 0 && (
+              <span className="text-emerald-400">● {priorityCounts.low} Low</span>
+            )}
+          </div>
+        </div>
+
+        {/* Stacked Priority Bar */}
+        <div
+          className="h-2 w-full bg-zinc-900 rounded-full overflow-hidden flex border border-zinc-800"
+          role="progressbar"
+          aria-label="Action priority distribution"
+        >
+          {priorityCounts.critical > 0 && (
+            <div
+              style={{ width: `${(priorityCounts.critical / totalActions) * 100}%` }}
+              className="bg-rose-500 h-full"
+              title={`${priorityCounts.critical} Critical Actions`}
+            />
+          )}
+          {priorityCounts.high > 0 && (
+            <div
+              style={{ width: `${(priorityCounts.high / totalActions) * 100}%` }}
+              className="bg-orange-500 h-full"
+              title={`${priorityCounts.high} High Priority Actions`}
+            />
+          )}
+          {priorityCounts.medium > 0 && (
+            <div
+              style={{ width: `${(priorityCounts.medium / totalActions) * 100}%` }}
+              className="bg-amber-500 h-full"
+              title={`${priorityCounts.medium} Medium Priority Actions`}
+            />
+          )}
+          {priorityCounts.low > 0 && (
+            <div
+              style={{ width: `${(priorityCounts.low / totalActions) * 100}%` }}
+              className="bg-emerald-500 h-full"
+              title={`${priorityCounts.low} Low Priority Actions`}
+            />
+          )}
+        </div>
       </div>
 
       {/* Visual Timeline Sequence */}

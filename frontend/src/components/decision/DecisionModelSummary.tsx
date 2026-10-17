@@ -85,14 +85,73 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
         </div>
       </div>
 
-      {/* Decision Summary & Reversibility */}
-      <div className="space-y-2">
+      {/* Decision Summary & Visual Complexity/Reversibility Panel */}
+      <div className="space-y-3">
         <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-sans font-medium">
           {decision.summary}
         </p>
-        <p className="text-xs text-zinc-400 leading-relaxed">
-          <span className="text-zinc-300 font-medium">Reversibility:</span> {formatSnakeCase(complexity.reversibility)}. {complexity.reasoning}
-        </p>
+
+        {/* Visual Complexity Gauge & Reversibility Indicators */}
+        <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-3.5 space-y-3 text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            {/* Reversibility Indicator */}
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border ${
+                  complexity.reversibility?.toLowerCase().includes("two_way") ||
+                  complexity.reversibility?.toLowerCase().includes("reversible")
+                    ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/60"
+                    : "bg-rose-950/50 text-rose-300 border-rose-800/60"
+                }`}
+              >
+                <span>
+                  {complexity.reversibility?.toLowerCase().includes("two_way") ||
+                  complexity.reversibility?.toLowerCase().includes("reversible")
+                    ? "⇄"
+                    : "⚡"}
+                </span>
+                <span>{formatSnakeCase(complexity.reversibility)} Commitment</span>
+              </span>
+              <span className="text-zinc-400 font-sans text-xs">
+                {complexity.reasoning}
+              </span>
+            </div>
+
+            {/* Numeric Score */}
+            {typeof complexity.score === "number" && (
+              <span className="font-mono text-xs text-zinc-300 shrink-0">
+                Score: <strong className="text-white">{complexity.score.toFixed(0)}</strong> / 100
+              </span>
+            )}
+          </div>
+
+          {/* Visual Complexity Score Horizontal Bar */}
+          {typeof complexity.score === "number" && (
+            <div className="space-y-1">
+              <div
+                className="relative h-2 w-full bg-zinc-900 rounded-full overflow-hidden border border-zinc-800"
+                role="progressbar"
+                aria-label="Decision complexity score"
+                aria-valuenow={complexity.score}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                {/* 3-Zone Gradient Track */}
+                <div className="absolute inset-0 bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500 opacity-80" />
+                {/* Cover mask */}
+                <div
+                  style={{ left: `${Math.min(100, Math.max(0, complexity.score))}%` }}
+                  className="absolute top-0 bottom-0 right-0 bg-zinc-900/90"
+                />
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-zinc-500">
+                <span>0 Low</span>
+                <span>50 Moderate</span>
+                <span>100 Critical</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {isExpanded && (

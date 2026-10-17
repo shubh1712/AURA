@@ -19,6 +19,7 @@ interface DecisionFormProps {
   onReset: () => void;
   onClearError: () => void;
   onRetry?: () => void;
+  onStop?: () => void;
 }
 
 export function DecisionForm({
@@ -36,6 +37,7 @@ export function DecisionForm({
   onReset,
   onClearError,
   onRetry,
+  onStop,
 }: DecisionFormProps) {
   const isFormDirty =
     Boolean(formData.question.trim()) ||
@@ -194,6 +196,21 @@ export function DecisionForm({
             )}
           </button>
 
+          {/* Stop Analyzing button during active processing */}
+          {isLoading && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-800/70 bg-rose-950/40 px-4 py-2.5 text-sm font-semibold text-rose-200 hover:bg-rose-900/60 hover:text-white transition-colors cursor-pointer shadow-sm active:scale-95"
+              aria-label="Stop active analysis"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+              <span>Stop Analyzing</span>
+            </button>
+          )}
+
           {/* Reset button */}
           {isFormDirty && !isLoading && (
             <button
@@ -206,8 +223,9 @@ export function DecisionForm({
           )}
         </div>
 
-        <span className="text-[11px] text-zinc-500 sm:text-right font-mono">
-          Calls FastAPI <code className="text-zinc-400">/api/analysis/jobs</code>
+        <span className="text-xs text-zinc-400 sm:text-right flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          <span>Autonomous 6-Stage Deliberation</span>
         </span>
       </div>
 
@@ -221,6 +239,7 @@ export function DecisionForm({
           error={apiError}
           errorStatusCode={apiErrorStatusCode}
           onRetry={onRetry}
+          onStop={onStop}
         />
       )}
     </form>

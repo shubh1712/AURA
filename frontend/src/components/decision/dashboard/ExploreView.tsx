@@ -2,7 +2,9 @@
 
 import React, { useState } from "react";
 import type { AnalysisResponse, ScenarioType } from "@/types";
+import { FutureExplorerTree } from "../scenario/FutureExplorerTree";
 import { ScenarioComparisonChart } from "../charts/ScenarioComparisonChart";
+import { ScenarioProbabilitySpectrum } from "../charts/ScenarioProbabilitySpectrum";
 import { ResilienceDriverChart } from "../charts/ResilienceDriverChart";
 import { WhatIfDashboard } from "../simulation/WhatIfDashboard";
 import { SimulationUnavailableBanner } from "../simulation/SimulationUnavailableBanner";
@@ -70,8 +72,46 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
         <section
           id="section-future-explorer"
           aria-label="Future Explorer and Scenario Engine"
-          className="space-y-5"
+          className="space-y-6"
         >
+          {/* Promoted Interactive Future Explorer Tree Canvas */}
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-5 sm:p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 pb-3 border-b border-zinc-800/80">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-sky-400 font-semibold">
+                    Interactive Projection Canvas
+                  </span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+                </div>
+                <h4 className="text-base sm:text-lg font-bold text-white tracking-tight mt-0.5">
+                  Interactive Future Scenario Tree
+                </h4>
+                <p className="text-xs text-zinc-400 mt-1 max-w-2xl font-sans leading-relaxed">
+                  Explore cascading downstream implications and branch probabilities deterministically derived by AURA.
+                  Select any trajectory node or tab below to inspect milestones, causal events, and vulnerabilities.
+                </p>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-400 bg-zinc-900 px-2.5 py-1 rounded border border-zinc-800 shrink-0">
+                Pan &amp; Zoom Enabled
+              </span>
+            </div>
+
+            <FutureExplorerTree
+              decisionTitle={result.decision_model?.decision?.summary || result.question}
+              scenarios={canonicalScenarios}
+              selectedScenarioType={selectedScenarioType}
+              onSelectScenario={setSelectedScenarioType}
+            />
+          </div>
+
+          {/* Proportional Likelihood Spectrum Visualization */}
+          <ScenarioProbabilitySpectrum
+            scenarios={canonicalScenarios}
+            selectedScenarioType={selectedScenarioType}
+            onSelectScenario={setSelectedScenarioType}
+          />
+
           <ScenarioComparisonChart
             scenarios={canonicalScenarios}
             selectedScenarioType={selectedScenarioType}
@@ -83,6 +123,10 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
             {canonicalScenarios.map((scen) => {
               const isSelected = selectedScenarioType === scen.scenario_type;
               const conciseSummary = scen.narrative;
+              const oppsCount = (scen.opportunities || []).length;
+              const risksCount = (scen.risks || []).length;
+              const totalDrivers = oppsCount + risksCount;
+              const oppPct = totalDrivers > 0 ? Math.round((oppsCount / totalDrivers) * 100) : 50;
 
               return (
                 <div
@@ -107,14 +151,47 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                       <span className="font-mono text-xs uppercase tracking-wider font-bold text-zinc-200 print:text-black">
                         {scen.name}
                       </span>
-                      <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 print:bg-white print:border-zinc-300 shrink-0">
-                        Modeled Horizon
+                      <span className="text-[10px] font-mono text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 print:bg-white print:border-zinc-300 shrink-0">
+                        {Math.round((scen.probability || 0) * 100)}% Prob
                       </span>
                     </div>
 
                     <p className="text-xs text-zinc-300 font-sans leading-relaxed print:text-zinc-800 break-words">
                       {conciseSummary}
                     </p>
+
+                    {/* Opportunity vs Risk Drivers Ratio Bar */}
+                    {totalDrivers > 0 && (
+                      <div className="pt-2 border-t border-zinc-800/60 space-y-1 text-[10px] font-mono">
+                        <div className="flex items-center justify-between text-zinc-400">
+                          <span className="text-emerald-400 font-medium">
+                            {oppsCount} Upside {oppsCount === 1 ? "Driver" : "Drivers"}
+                          </span>
+                          <span className="text-rose-400 font-medium">
+                            {risksCount} {risksCount === 1 ? "Vulnerability" : "Vulnerabilities"}
+                          </span>
+                        </div>
+                        <div
+                          className="h-1.5 w-full bg-zinc-900 rounded-full overflow-hidden flex border border-zinc-800"
+                          role="meter"
+                          aria-label="Upside vs Risk balance"
+                          aria-valuenow={oppPct}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                        >
+                          <div
+                            style={{ width: `${oppPct}%` }}
+                            className="bg-emerald-500 h-full transition-all"
+                            title={`${oppsCount} Upside Drivers (${oppPct}%)`}
+                          />
+                          <div
+                            style={{ width: `${100 - oppPct}%` }}
+                            className="bg-rose-500 h-full transition-all"
+                            title={`${risksCount} Vulnerabilities (${100 - oppPct}%)`}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {/* Top Vulnerabilities with natural wrapping and complete text */}
                     {scen.risks && scen.risks.length > 0 && (
