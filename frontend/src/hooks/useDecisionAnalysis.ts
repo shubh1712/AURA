@@ -273,9 +273,9 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
 
         if (jobStatusResp.status === "timed_out") {
           // Terminal Timeout (HTTP 504)
+          setJobStatus("timed_out");
           setApiError(
-            jobStatusResp.error ||
-            "The decision analysis exceeded its allowed processing time."
+            "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
           );
           setApiErrorStatusCode(504);
           setStatus("error");
@@ -286,6 +286,7 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
 
         if (jobStatusResp.status === "failed") {
           // Terminal Failure
+          setJobStatus("failed");
           setApiError(
             jobStatusResp.error ||
             "An error occurred while evaluating the decision inquiry."
@@ -411,12 +412,14 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
           pollJobStatusRef.current?.(canonicalJobId, runIdRef.current);
         }, POLLING_INTERVAL_MS);
       } else if (statusResp.status === "timed_out") {
+        setJobStatus("timed_out");
         setApiError(
-          statusResp.error || "The previous decision analysis exceeded its allowed processing time."
+          "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
         );
         setApiErrorStatusCode(504);
         setStatus("error");
       } else if (statusResp.status === "failed") {
+        setJobStatus("failed");
         setApiError(
           statusResp.error || "The previous decision analysis encountered an unrecoverable failure."
         );
@@ -564,16 +567,19 @@ export function useDecisionAnalysis(ownerId?: string | null): UseDecisionAnalysi
       if (runIdRef.current !== currentRunId || (error instanceof Error && error.name === "AbortError")) {
         return false;
       }
-      const errorMessage =
-        error instanceof ApiClientError
-          ? error.message
-          : "An unexpected error occurred while communicating with the AURA backend.";
       const statusCode =
         error instanceof ApiClientError && typeof error.statusCode === "number"
           ? error.statusCode
           : null;
+      const errorMessage =
+        statusCode === 504
+          ? "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+          : error instanceof ApiClientError
+            ? error.message
+            : "An unexpected error occurred while communicating with the AURA backend.";
       setApiError(errorMessage);
       setApiErrorStatusCode(statusCode);
+      setJobStatus(statusCode === 504 ? "timed_out" : "failed");
       setStatus("error");
       setIsLoading(false);
       isSubmittingRef.current = false;

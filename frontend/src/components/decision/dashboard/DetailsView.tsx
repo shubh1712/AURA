@@ -12,6 +12,8 @@ import { RecommendationDashboard } from "../recommendation/RecommendationDashboa
 import { FutureExplorerDashboard } from "../scenario/FutureExplorerDashboard";
 import { ResilienceDashboard } from "../resilience/ResilienceDashboard";
 import { EvidenceQualityDistribution } from "../charts/EvidenceQualityDistribution";
+import { StageProgressionTracker } from "../charts/StageProgressionTracker";
+import { deriveStageProgression } from "@/lib/visualIntelligence";
 import { formatEnumLabel, formatProvenance } from "@/lib/formatters";
 
 interface DetailsViewProps {
@@ -66,6 +68,20 @@ export function DetailsView({ result }: DetailsViewProps) {
   const { decision_model, evidence_package, reasoning_board, recommendation, scenarios, resilience } = result;
 
   const assumptions = decision_model?.assumptions || [];
+  const stages = deriveStageProgression(result);
+
+  // Confidence distribution of assumptions
+  const confCounts = assumptions.reduce(
+    (acc, a) => {
+      const c = (a.confidence || "medium").toLowerCase();
+      if (c === "high") acc.high++;
+      else if (c === "low") acc.low++;
+      else acc.medium++;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0 }
+  );
+  const totalAssumptions = assumptions.length;
 
   return (
     <div className="space-y-6" aria-label="Analytical Deep-Dive and Stage Artifacts">
@@ -108,6 +124,13 @@ export function DetailsView({ result }: DetailsViewProps) {
         </p>
       </div>
 
+      {/* Visual Six-Stage Progression Pipeline */}
+      <StageProgressionTracker
+        stages={stages}
+        openSections={openSections}
+        onSelectStage={toggleSection}
+      />
+
       {/* Assumption Registry (Prominently featured) */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-4">
         <div
@@ -136,6 +159,46 @@ export function DetailsView({ result }: DetailsViewProps) {
         <div
           className={`${openSections.assumptions ? "block" : "hidden print:block"} pt-2 border-t border-zinc-800/80 space-y-3`}
         >
+          {/* Epistemic Confidence Distribution Bar */}
+          {totalAssumptions > 0 && (
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-3 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                <span>Epistemic Confidence Distribution:</span>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <span className="text-emerald-400">● {confCounts.high} High</span>
+                  <span className="text-amber-400">● {confCounts.medium} Medium</span>
+                  <span className="text-rose-400">● {confCounts.low} Low</span>
+                </div>
+              </div>
+              <div
+                className="h-2 w-full bg-zinc-900 rounded-full overflow-hidden flex border border-zinc-800"
+                role="progressbar"
+                aria-label="Assumption confidence distribution"
+              >
+                {confCounts.high > 0 && (
+                  <div
+                    style={{ width: `${(confCounts.high / totalAssumptions) * 100}%` }}
+                    className="bg-emerald-500 h-full"
+                    title={`${confCounts.high} High Confidence`}
+                  />
+                )}
+                {confCounts.medium > 0 && (
+                  <div
+                    style={{ width: `${(confCounts.medium / totalAssumptions) * 100}%` }}
+                    className="bg-amber-500 h-full"
+                    title={`${confCounts.medium} Medium Confidence`}
+                  />
+                )}
+                {confCounts.low > 0 && (
+                  <div
+                    style={{ width: `${(confCounts.low / totalAssumptions) * 100}%` }}
+                    className="bg-rose-500 h-full"
+                    title={`${confCounts.low} Low Confidence`}
+                  />
+                )}
+              </div>
+            </div>
+          )}
           {assumptions.length === 0 ? (
             <p className="text-xs text-zinc-500 italic">No explicit assumptions registered in the decision model.</p>
           ) : (

@@ -106,8 +106,8 @@ export function StageAwareProgress({
           )}
           <h3 className="text-sm font-semibold text-zinc-100 tracking-tight">
             {isError
-              ? status === "timed_out"
-                ? "Analysis Timed Out"
+              ? status === "timed_out" || errorStatusCode === 504
+                ? "503 — AI Service Temporarily Unavailable"
                 : "Analysis Interrupted"
               : isComplete
                 ? "Analysis Complete"
@@ -146,14 +146,14 @@ export function StageAwareProgress({
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="font-semibold text-red-300 text-sm">
-                {status === "timed_out" ? "Processing Deadline Exceeded" : "Execution Error"}
-                {errorStatusCode && ` (HTTP ${errorStatusCode})`}
+                {status === "timed_out" || errorStatusCode === 504
+                  ? "503 — AI Service Temporarily Unavailable"
+                  : `Execution Error${errorStatusCode ? ` (HTTP ${errorStatusCode})` : ""}`}
               </p>
               <p className="text-red-300/90 leading-relaxed mt-1 font-sans">
-                {error ||
-                  (status === "timed_out"
-                    ? "The decision analysis exceeded the allowed time ceiling. Try refining your question."
-                    : "The analysis engine encountered an unexpected error.")}
+                {status === "timed_out" || errorStatusCode === 504
+                  ? "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+                  : error || "The analysis engine encountered an unexpected error."}
               </p>
             </div>
           </div>

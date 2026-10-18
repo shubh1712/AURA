@@ -74,8 +74,12 @@ export function DecisionForm({
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-red-300">Analysis Error</span>
-              {apiErrorStatusCode && (
+              <span className="font-semibold text-red-300">
+                {apiErrorStatusCode === 504
+                  ? "503 — AI Service Temporarily Unavailable"
+                  : "Analysis Error"}
+              </span>
+              {apiErrorStatusCode && apiErrorStatusCode !== 504 && (
                 <span className="rounded bg-red-900/60 px-1.5 py-0.5 text-[10px] font-mono font-medium text-red-200 border border-red-800/60">
                   HTTP {apiErrorStatusCode}
                 </span>
@@ -90,7 +94,11 @@ export function DecisionForm({
               &times;
             </button>
           </div>
-          <p className="text-red-300/90 leading-relaxed font-sans">{apiError}</p>
+          <p className="text-red-300/90 leading-relaxed font-sans">
+            {apiErrorStatusCode === 504
+              ? "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+              : apiError}
+          </p>
         </div>
       )}
 

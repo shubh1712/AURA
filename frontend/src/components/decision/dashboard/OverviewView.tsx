@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import type { AnalysisResponse } from "@/types";
 import {
   extractConciseRecommendation,
@@ -10,6 +10,9 @@ import {
 import { FeasibilityTargetChart } from "../charts/FeasibilityTargetChart";
 import { AlternativesComparisonMatrix } from "../charts/AlternativesComparisonMatrix";
 import { BoardroomAlignmentGauge } from "../charts/BoardroomAlignmentGauge";
+import { ExecutiveKpiGrid } from "../charts/ExecutiveKpiGrid";
+import { RiskUncertaintyMatrix } from "../charts/RiskUncertaintyMatrix";
+import { deriveExecutiveKPIs } from "@/lib/visualIntelligence";
 import { getStatusConfig } from "@/lib/recommendationHelpers";
 
 interface OverviewViewProps {
@@ -25,6 +28,7 @@ export function OverviewView({
   onActionClick,
   onDetailsClick,
 }: OverviewViewProps) {
+  const [showFullRationale, setShowFullRationale] = useState(false);
   const { decision_model, recommendation } = result;
 
   // Extract decision title cleanly
@@ -57,6 +61,9 @@ export function OverviewView({
 
   // Primary alternatives
   const alternatives = recommendation?.alternative_options || [];
+
+  // Visual Intelligence KPIs
+  const kpis = deriveExecutiveKPIs(result);
 
   return (
     <div className="space-y-6" aria-label="Executive Recommendation Overview">
@@ -108,18 +115,36 @@ export function OverviewView({
           </h2>
         </div>
 
-        {/* 1–2 Sentence Recommendation Card */}
-        <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/25 p-5 space-y-2">
+        {/* Visual Intelligence Executive KPI Grid */}
+        {kpis.length > 0 && <ExecutiveKpiGrid kpis={kpis} />}
+
+        {/* 1–2 Sentence Recommendation Card with Progressive Disclosure */}
+        <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/25 p-5 space-y-2.5">
           <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-bold block">
             AURA Recommendation
           </span>
           <p className="text-base sm:text-lg font-semibold text-emerald-100 leading-snug">
             {conciseRecommendation}
           </p>
+
           {executiveRationale && (
-            <p className="text-xs sm:text-sm text-zinc-300 font-sans leading-relaxed pt-1">
-              {executiveRationale}
-            </p>
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowFullRationale(!showFullRationale)}
+                className="text-xs text-emerald-400 hover:text-emerald-300 font-mono inline-flex items-center gap-1.5 cursor-pointer select-none transition-colors"
+                aria-expanded={showFullRationale}
+              >
+                <span>{showFullRationale ? "Hide Detailed Rationale" : "Read Full Executive Rationale"}</span>
+                <span className="text-[10px]">{showFullRationale ? "▲" : "▼"}</span>
+              </button>
+
+              {showFullRationale && (
+                <p className="text-xs sm:text-sm text-zinc-300 font-sans leading-relaxed pt-2.5 border-t border-emerald-900/40 mt-2">
+                  {executiveRationale}
+                </p>
+              )}
+            </div>
           )}
         </div>
 
@@ -196,74 +221,11 @@ export function OverviewView({
         />
       )}
 
-      {/* 5. Two-Column Governance Grid: Top 3 Missing Inputs & Trigger Conditions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* Top Three Decision-Changing Missing Inputs */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-3 text-xs">
-          <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-sky-400 font-semibold">
-              Epistemic Risks
-            </span>
-            <span className="font-mono text-[10px] text-zinc-500">Ranked by Impact</span>
-          </div>
-          <h4 className="text-sm font-semibold text-white tracking-tight">
-            Top Missing Inputs That Could Shift Decision
-          </h4>
-
-          {missingInputs.length > 0 ? (
-            <ul className="space-y-2 pt-1">
-              {missingInputs.map((input, idx) => (
-                <li
-                  key={idx}
-                  className="flex items-start gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-2.5 text-zinc-200"
-                >
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-sky-950 text-sky-300 font-mono text-[10px] font-bold border border-sky-800/60">
-                    {idx + 1}
-                  </span>
-                  <span className="leading-snug font-sans">{input}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-zinc-500 italic">
-              No critical missing inputs identified; baseline inputs sufficient for determination.
-            </p>
-          )}
-        </div>
-
-        {/* Conditions That Would Change the Recommendation */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-3 text-xs">
-          <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-amber-400 font-semibold">
-              Pivot Triggers
-            </span>
-            <span className="font-mono text-[10px] text-zinc-500">Reversal Conditions</span>
-          </div>
-          <h4 className="text-sm font-semibold text-white tracking-tight">
-            Conditions That Would Reverse Recommendation
-          </h4>
-
-          {changingConditions.length > 0 ? (
-            <ul className="space-y-2 pt-1">
-              {changingConditions.map((cond, idx) => (
-                <li
-                  key={idx}
-                  className="flex items-start gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-2.5 text-zinc-200"
-                >
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-amber-950 text-amber-300 font-mono text-[10px] font-bold border border-amber-800/60">
-                    !
-                  </span>
-                  <span className="leading-snug font-sans">{cond}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-zinc-500 italic">
-              Recommendation remains robust under baseline modelled conditions.
-            </p>
-          )}
-        </div>
-      </div>
+      {/* 6. Visual Epistemic Risks & Dynamic Pivot Triggers Matrix */}
+      <RiskUncertaintyMatrix
+        missingInputs={missingInputs}
+        changingConditions={changingConditions}
+      />
 
       {/* 6. Action Intelligence & Execution Roadmap Shortcut */}
       {onActionClick && (

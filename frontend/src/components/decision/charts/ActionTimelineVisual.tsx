@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import type { IntelligentActionItem, ActionItem } from "@/types";
 import { formatEnumLabel } from "@/lib/formatters";
+import { deriveRoleDistribution } from "@/lib/visualIntelligence";
 
 type UnifiedAction = IntelligentActionItem | ActionItem;
 
@@ -44,6 +45,7 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
   const totalActions = actions.length;
   const criticalHighCount = priorityCounts.critical + priorityCounts.high;
   const totalDepsCount = actions.reduce((acc, a) => acc + (a.dependencies?.length || 0), 0);
+  const roleDistribution = deriveRoleDistribution(actions);
 
   return (
     <div
@@ -134,6 +136,28 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
           )}
         </div>
       </div>
+
+      {/* Role Ownership & Accountability Strip */}
+      {roleDistribution.length > 0 && (
+        <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/30 p-3 space-y-2 text-xs">
+          <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
+            <span>Operational Ownership &amp; Accountability:</span>
+            <span>{roleDistribution.length} Distinct Roles</span>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-0.5">
+            {roleDistribution.map((rd) => (
+              <span
+                key={rd.role}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-mono bg-zinc-950/80 border border-zinc-800 text-zinc-200"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                <span className="font-semibold text-white">{rd.role}</span>
+                <span className="text-zinc-500 font-mono">({rd.count} actions • {rd.percentage}%)</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Visual Timeline Sequence */}
       <div className="space-y-3 relative before:absolute before:inset-0 before:left-5 before:w-0.5 before:bg-zinc-800/80 before:z-0">

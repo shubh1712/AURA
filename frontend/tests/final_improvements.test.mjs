@@ -13,6 +13,10 @@ import { BoardroomAlignmentGauge } from "../src/components/decision/charts/Board
 import { ScenarioProbabilitySpectrum } from "../src/components/decision/charts/ScenarioProbabilitySpectrum.tsx";
 import { ActionTimelineVisual } from "../src/components/decision/charts/ActionTimelineVisual.tsx";
 import { DecisionModelSummary } from "../src/components/decision/DecisionModelSummary.tsx";
+import { ExecutiveKpiGrid } from "../src/components/decision/charts/ExecutiveKpiGrid.tsx";
+import { RiskUncertaintyMatrix } from "../src/components/decision/charts/RiskUncertaintyMatrix.tsx";
+import { StageProgressionTracker } from "../src/components/decision/charts/StageProgressionTracker.tsx";
+import { deriveExecutiveKPIs, deriveRoleDistribution, deriveStageProgression } from "../src/lib/visualIntelligence.ts";
 import { createAnalysisJob, getAnalysisJobStatus, getAnalysisJobResult } from "../src/lib/api.ts";
 
 const MOCK_SCENARIOS = {
@@ -62,6 +66,12 @@ const MOCK_RESULT = {
       summary: "Database Architecture Scaling Strategy",
       time_horizon: "medium_term",
     },
+    complexity: {
+      level: "medium",
+      score: 65,
+      reversibility: "two_way_door",
+      reasoning: "Read replicas can be de-provisioned cleanly.",
+    },
     constraints: [],
     objectives: [],
     variables: [],
@@ -73,9 +83,46 @@ const MOCK_RESULT = {
     recommended_action: "Implement PostgreSQL read replicas with connection pooling.",
     executive_rationale: "Maximizes throughput within existing operational envelope.",
     alternative_options: [],
+    action_plan: {
+      id: "ap-01",
+      strategy_summary: "Phased database replica rollout",
+      actions: [
+        { id: "act-1", title: "Provision replica", priority: "critical", time_horizon: "Week 1", sequence: 1 },
+        { id: "act-2", title: "Setup PgBouncer", priority: "high", time_horizon: "Week 2", sequence: 2 },
+      ],
+    },
     uncertainty_assessment: {
       critical_missing_information: ["Peak query write-to-read ratio"],
       conditions_changing_recommendation: ["Write volume exceeds 50k writes/sec"],
+    },
+  },
+  reasoning_board: {
+    id: "rb-01",
+    decision_model_id: "dm-01",
+    evidence_package_id: "ep-01",
+    perspectives: [
+      {
+        id: "p1",
+        perspective_type: "growth",
+        summary: "Read replicas unlock 3x throughput.",
+        arguments: [{ id: "a1", claim: "High scalability", direction: "favorable", basis: "evidence", reasoning: "", evidence_item_ids: [], requirement_ids: [], assumption_ids: [], unknown_ids: [], evidence_gap_ids: [], related_entity_ids: [] }],
+        concerns: [],
+        opportunities: [],
+        critical_assumption_ids: [],
+        evidence_gap_ids: [],
+        unresolved_questions: [],
+        limitations: [],
+      },
+    ],
+    disagreements: [],
+    synthesis: {
+      summary: "Consensus on replica approach.",
+      areas_of_agreement: ["Replica is cost effective"],
+      disagreement_ids: [],
+      critical_assumption_ids: [],
+      critical_evidence_gap_ids: [],
+      evidence_sensitive_points: [],
+      unresolved_questions: [],
     },
   },
   scenarios: MOCK_SCENARIOS,
@@ -458,5 +505,234 @@ describe("AURA Final Premium Transformation Tests", () => {
     assert.ok(markup.includes("65"));
     assert.ok(markup.includes('role="progressbar"'));
     assert.ok(markup.includes("Replicas can be de-provisioned without permanent data loss."));
+  });
+
+  // ----------------------------------------------------------------------------
+  // 13. Visual Intelligence: ExecutiveKpiGrid & deriveExecutiveKPIs
+  // ----------------------------------------------------------------------------
+  test("13. deriveExecutiveKPIs extracts structured KPIs and ExecutiveKpiGrid renders responsive cards", () => {
+    const kpis = deriveExecutiveKPIs(MOCK_RESULT);
+    assert.ok(kpis.length >= 3, "Must derive at least 3 executive KPIs from complete result");
+
+    const statusKpi = kpis.find((k) => k.id === "status");
+    assert.ok(statusKpi, "Must include decision status KPI");
+    assert.equal(statusKpi.value, "PROCEED");
+
+    const markup = renderToStaticMarkup(
+      React.createElement(ExecutiveKpiGrid, { kpis })
+    );
+
+    assert.ok(markup.includes('role="region"'));
+    assert.ok(markup.includes("PROCEED"));
+    assert.ok(markup.includes("Trajectory Forecast") || markup.includes("Decision Stance"));
+  });
+
+  // ----------------------------------------------------------------------------
+  // 14. Visual Intelligence: Operational Role Ownership in ActionTimelineVisual
+  // ----------------------------------------------------------------------------
+  test("14. deriveRoleDistribution calculates accurate role counts and ActionTimelineVisual renders role strip", () => {
+    const actions = [
+      { id: "1", title: "Config", priority: "high", owner_role: "DevOps Lead", dependencies: [] },
+      { id: "2", title: "Migrate", priority: "critical", owner_role: "Database Architect", dependencies: ["1"] },
+      { id: "3", title: "Test", priority: "medium", owner_role: "DevOps Lead", dependencies: ["2"] },
+    ];
+
+    const roles = deriveRoleDistribution(actions);
+    assert.equal(roles.length, 2);
+    assert.equal(roles[0].role, "DevOps Lead");
+    assert.equal(roles[0].count, 2);
+    assert.equal(roles[0].percentage, 67);
+
+    const markup = renderToStaticMarkup(
+      React.createElement(ActionTimelineVisual, { actions })
+    );
+
+    assert.ok(markup.includes("Operational Ownership &amp; Accountability") || markup.includes("Operational Ownership & Accountability"));
+    assert.ok(markup.includes("DevOps Lead"));
+    assert.ok(markup.includes("Database Architect"));
+    assert.ok(markup.includes("2 Distinct Roles"));
+  });
+
+  // ----------------------------------------------------------------------------
+  // 15. RiskUncertaintyMatrix: Ranked Epistemic Gaps & Dynamic Pivot Triggers
+  // ----------------------------------------------------------------------------
+  test("15. RiskUncertaintyMatrix renders ranked sensitivity cards and pivot triggers", () => {
+    const missing = ["Peak write volume", "Secondary replica latency"];
+    const conditions = ["Write traffic exceeds 50k req/sec"];
+
+    const markup = renderToStaticMarkup(
+      React.createElement(RiskUncertaintyMatrix, {
+        missingInputs: missing,
+        changingConditions: conditions,
+      })
+    );
+
+    assert.ok(markup.includes("Epistemic Boundary Risks"));
+    assert.ok(markup.includes("2 Ranked Gaps"));
+    assert.ok(markup.includes("#1"));
+    assert.ok(markup.includes("Peak write volume"));
+    assert.ok(markup.includes("Dynamic Pivot Triggers"));
+    assert.ok(markup.includes("Write traffic exceeds 50k req/sec"));
+  });
+
+  // ----------------------------------------------------------------------------
+  // 16. StageProgressionTracker: 6-Stage Audit Pipeline Flow
+  // ----------------------------------------------------------------------------
+  test("16. deriveStageProgression maps 6 stages and StageProgressionTracker renders interactive pipeline flow", () => {
+    const stages = deriveStageProgression(MOCK_RESULT);
+    assert.equal(stages.length, 6, "Must define exactly 6 stages");
+    assert.ok(stages[0].isComplete, "Stage 1 must be complete");
+    assert.ok(stages[3].isComplete, "Stage 4 must be complete");
+
+    const markup = renderToStaticMarkup(
+      React.createElement(StageProgressionTracker, {
+        stages,
+        openSections: { stage1: true },
+      })
+    );
+
+    assert.ok(markup.includes("Audit Pipeline Flow"));
+    assert.ok(markup.includes("Framer"));
+    assert.ok(markup.includes("Evidence"));
+    assert.ok(markup.includes("Boardroom"));
+    assert.ok(markup.includes("Recommendation"));
+    assert.ok(markup.includes("Scenarios"));
+    assert.ok(markup.includes("Resilience"));
+  });
+
+  // ----------------------------------------------------------------------------
+  // 17. Analysis HTTP 504: DecisionForm User-Friendly 503 Display
+  // ----------------------------------------------------------------------------
+  test("17. DecisionForm renders 503 Service Unavailable title and Gemini message when analysis fails with HTTP 504", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(DecisionForm, {
+        formData: { question: "Scale cluster?", context: "", constraints: "" },
+        isLoading: false,
+        jobStatus: null,
+        apiError: "The decision analysis exceeded its allowed processing time.",
+        apiErrorStatusCode: 504,
+        onFieldChange: () => {},
+        onSubmit: () => {},
+        onReset: () => {},
+        onClearError: () => {},
+      })
+    );
+
+    // Displays the user-friendly 503-style title
+    assert.ok(
+      markup.includes("503 — AI Service Temporarily Unavailable"),
+      "Must display '503 — AI Service Temporarily Unavailable' title"
+    );
+    // Displays the friendly message explaining Gemini traffic
+    const normalizedMarkup = markup.replace(/&#x27;/g, "'");
+    assert.ok(
+      normalizedMarkup.includes(
+        "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+      ),
+      "Must display user-friendly Gemini traffic explanation"
+    );
+    // Does NOT render an intrusive 'HTTP 504' badge next to the 503-style title
+    assert.ok(
+      !markup.includes("HTTP 504"),
+      "Must not render raw 'HTTP 504' badge next to 503-style service unavailable title"
+    );
+  });
+
+  // ----------------------------------------------------------------------------
+  // 18. Analysis Timed-Out Job State: StageAwareProgress User-Friendly 503 Display
+  // ----------------------------------------------------------------------------
+  test("18. StageAwareProgress renders 503 Service Unavailable title, Gemini message, and Retry button when timed out or status is 504", () => {
+    let retried = false;
+    const markup = renderToStaticMarkup(
+      React.createElement(StageAwareProgress, {
+        status: "timed_out",
+        stage: "stage2_evidence_engine",
+        error: "Gateway timeout during analysis",
+        errorStatusCode: 504,
+        onRetry: () => {
+          retried = true;
+        },
+      })
+    );
+
+    // Displays 503 header and error title
+    assert.ok(
+      markup.includes("503 — AI Service Temporarily Unavailable"),
+      "Must display '503 — AI Service Temporarily Unavailable' in StageAwareProgress"
+    );
+    // Displays the friendly message explaining Gemini traffic
+    const normalizedMarkup = markup.replace(/&#x27;/g, "'");
+    assert.ok(
+      normalizedMarkup.includes(
+        "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+      ),
+      "Must display user-friendly Gemini traffic explanation"
+    );
+    // Retry button is preserved
+    assert.ok(
+      markup.includes("Retry Analysis"),
+      "Must preserve Retry Analysis action button"
+    );
+  });
+
+  // ----------------------------------------------------------------------------
+  // 19. Preserves Standard Error Display for HTTP 400, 403, and 500 Errors
+  // ----------------------------------------------------------------------------
+  test("19. DecisionForm and StageAwareProgress preserve standard error labels and original messages for HTTP 400, 403, and 500", () => {
+    // Test HTTP 400 Bad Request
+    const markup400 = renderToStaticMarkup(
+      React.createElement(DecisionForm, {
+        formData: { question: "", context: "", constraints: "" },
+        isLoading: false,
+        jobStatus: null,
+        apiError: "Question must be at least 10 characters.",
+        apiErrorStatusCode: 400,
+        onFieldChange: () => {},
+        onSubmit: () => {},
+        onReset: () => {},
+        onClearError: () => {},
+      })
+    );
+    assert.ok(markup400.includes("Analysis Error"), "HTTP 400 must display 'Analysis Error'");
+    assert.ok(markup400.includes("HTTP 400"), "HTTP 400 must display HTTP 400 badge");
+    assert.ok(markup400.includes("Question must be at least 10 characters."), "HTTP 400 must retain original message");
+    assert.ok(!markup400.includes("503 — AI Service Temporarily Unavailable"), "HTTP 400 must not display 503 title");
+    assert.ok(!markup400.includes("Gemini may be experiencing high traffic"), "HTTP 400 must not display Gemini explanation");
+
+    // Test HTTP 403 Forbidden
+    const markup403 = renderToStaticMarkup(
+      React.createElement(DecisionForm, {
+        formData: { question: "Restricted analysis?", context: "", constraints: "" },
+        isLoading: false,
+        jobStatus: null,
+        apiError: "Access denied to organization workspace.",
+        apiErrorStatusCode: 403,
+        onFieldChange: () => {},
+        onSubmit: () => {},
+        onReset: () => {},
+        onClearError: () => {},
+      })
+    );
+    assert.ok(markup403.includes("Analysis Error"), "HTTP 403 must display 'Analysis Error'");
+    assert.ok(markup403.includes("HTTP 403"), "HTTP 403 must display HTTP 403 badge");
+    assert.ok(markup403.includes("Access denied to organization workspace."), "HTTP 403 must retain original message");
+    assert.ok(!markup403.includes("503 — AI Service Temporarily Unavailable"), "HTTP 403 must not display 503 title");
+    assert.ok(!markup403.includes("Gemini may be experiencing high traffic"), "HTTP 403 must not display Gemini explanation");
+
+    // Test HTTP 500 Internal Server Error in StageAwareProgress
+    const markup500 = renderToStaticMarkup(
+      React.createElement(StageAwareProgress, {
+        status: "failed",
+        stage: "stage1_decision_boundary",
+        error: "Internal database query failed.",
+        errorStatusCode: 500,
+        onRetry: () => {},
+      })
+    );
+    assert.ok(markup500.includes("Analysis Interrupted"), "HTTP 500 must display 'Analysis Interrupted' header");
+    assert.ok(markup500.includes("Execution Error (HTTP 500)"), "HTTP 500 must display 'Execution Error (HTTP 500)' title");
+    assert.ok(markup500.includes("Internal database query failed."), "HTTP 500 must retain original message");
+    assert.ok(!markup500.includes("503 — AI Service Temporarily Unavailable"), "HTTP 500 must not display 503 title");
+    assert.ok(!markup500.includes("Gemini may be experiencing high traffic"), "HTTP 500 must not display Gemini explanation");
   });
 });

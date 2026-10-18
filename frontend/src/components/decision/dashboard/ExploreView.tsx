@@ -20,6 +20,7 @@ interface ExploreViewProps {
 
 export function ExploreView({ result, ownerId }: ExploreViewProps) {
   const [selectedScenarioType, setSelectedScenarioType] = useState<ScenarioType>("base_case");
+  const [expandedNarratives, setExpandedNarratives] = useState<Record<string, boolean>>({});
 
   const hasValidScenarios = Boolean(
     result.scenarios &&
@@ -156,9 +157,31 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                       </span>
                     </div>
 
-                    <p className="text-xs text-zinc-300 font-sans leading-relaxed print:text-zinc-800 break-words">
-                      {conciseSummary}
-                    </p>
+                    {/* Narrative with progressive disclosure */}
+                    <div className="space-y-1">
+                      <p
+                        className={`text-xs text-zinc-300 font-sans leading-relaxed print:text-zinc-800 break-words ${
+                          expandedNarratives[scen.scenario_type] ? "" : "line-clamp-2"
+                        }`}
+                      >
+                        {conciseSummary}
+                      </p>
+                      {conciseSummary && conciseSummary.length > 90 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedNarratives((prev) => ({
+                              ...prev,
+                              [scen.scenario_type]: !prev[scen.scenario_type],
+                            }));
+                          }}
+                          className="text-[10px] font-mono text-sky-400 hover:text-sky-300 underline cursor-pointer select-none"
+                        >
+                          {expandedNarratives[scen.scenario_type] ? "Hide Full Narrative ▲" : "Read Full Narrative ▼"}
+                        </button>
+                      )}
+                    </div>
 
                     {/* Opportunity vs Risk Drivers Ratio Bar */}
                     {totalDrivers > 0 && (
@@ -193,9 +216,35 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                       </div>
                     )}
 
+                    {/* Timeline Milestones Horizontal Sequence Strip */}
+                    {scen.timeline && scen.timeline.length > 0 && (
+                      <div className="pt-2 border-t border-zinc-800/60 space-y-1.5 text-[10px] font-mono">
+                        <span className="text-[10px] uppercase tracking-wider text-sky-400 font-semibold block">
+                          Milestone Cadence ({scen.timeline.length}):
+                        </span>
+                        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                          {scen.timeline.slice(0, 3).map((m, mIdx) => (
+                            <div
+                              key={m.id || mIdx}
+                              className="flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 px-2 py-0.5 rounded text-zinc-300 shrink-0 text-[10px]"
+                              title={`${m.title}: ${m.expected_outcome || m.description}`}
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-400 shrink-0" />
+                              <span className="font-semibold text-white truncate max-w-[100px]">
+                                {m.title}
+                              </span>
+                              <span className="text-[9px] text-zinc-500 font-mono">
+                                ({m.time_horizon})
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Top Vulnerabilities with natural wrapping and complete text */}
                     {scen.risks && scen.risks.length > 0 && (
-                      <div className="pt-2.5 border-t border-zinc-800/60 space-y-1.5 text-[11px] print:border-zinc-300">
+                      <div className="pt-2 border-t border-zinc-800/60 space-y-1.5 text-[11px] print:border-zinc-300">
                         <span className="text-[10px] font-mono uppercase tracking-wider text-rose-400 font-semibold block print:text-zinc-800">
                           Top Vulnerabilities:
                         </span>
