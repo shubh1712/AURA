@@ -23,7 +23,7 @@ export function Header() {
 
   return (
     <header className="w-full border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md sticky top-0 z-40">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8 xl:px-10">
         {/* AURA Logo and Brand */}
         <div className="flex items-center space-x-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 font-mono text-sm font-semibold tracking-wider text-zinc-100 shadow-sm">
@@ -53,9 +53,9 @@ export function Header() {
             />
             <span className="text-[11px] font-medium tracking-wide">
               {backendOnline === true
-                ? "FastAPI Engine Online"
+                ? "Decision Engine Online"
                 : backendOnline === false
-                ? "Backend Offline (Port 8000)"
+                ? "Decision Engine Unavailable"
                 : "Connecting to Engine..."}
             </span>
           </div>

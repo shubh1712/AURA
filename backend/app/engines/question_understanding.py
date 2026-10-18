@@ -20,7 +20,7 @@ from app.engines.complexity import (
 )
 from app.engines.provenance import audit_decision_provenance
 from app.schemas.decision_model import DecisionModel
-from app.services.llm.client import LLMClient, LLMTimeoutError
+from app.services.llm.client import LLMClient, LLMConfig, LLMTimeoutError
 from app.services.llm.prompts import (
     DECOMPOSITION_SYSTEM_PROMPT,
     build_decomposition_prompt,
@@ -50,6 +50,7 @@ class QuestionUnderstandingEngine:
         context: Optional[Dict[str, Any]] = None,
         constraints: Optional[List[str]] = None,
         deadline_monotonic: Optional[float] = None,
+        config: Optional[LLMConfig] = None,
     ) -> DecisionModel:
         """Deconstructs user inquiry into a provenance-audited DecisionModel.
 
@@ -58,6 +59,7 @@ class QuestionUnderstandingEngine:
             context: Optional background facts or metrics.
             constraints: Optional explicit boundaries.
             deadline_monotonic: Optional absolute monotonic deadline for the operation.
+            config: Optional LLMConfig override (e.g. for opt-in Framer diagnostic timeout).
 
         Returns:
             Fully instantiated, provenance-verified DecisionModel.
@@ -73,20 +75,25 @@ class QuestionUnderstandingEngine:
         )
 
         # 2. Invoke structured LLM generation
+        gen_kwargs: Dict[str, Any] = {
+            "prompt": prompt,
+            "response_schema": DecisionModel,
+            "system_instruction": DECOMPOSITION_SYSTEM_PROMPT,
+            "deadline_monotonic": deadline_monotonic,
+        }
+        if config is not None:
+            gen_kwargs["config"] = config
+
         try:
-            raw_model = self.llm_client.generate_structured(
-                prompt=prompt,
-                response_schema=DecisionModel,
-                system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
-                deadline_monotonic=deadline_monotonic,
-            )
+            raw_model = self.llm_client.generate_structured(**gen_kwargs)
         except TypeError as te:
-            if "unexpected keyword argument 'deadline_monotonic'" in str(te):
-                raw_model = self.llm_client.generate_structured(
-                    prompt=prompt,
-                    response_schema=DecisionModel,
-                    system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
-                )
+            if "unexpected keyword argument" in str(te):
+                fallback_kwargs: Dict[str, Any] = {
+                    "prompt": prompt,
+                    "response_schema": DecisionModel,
+                    "system_instruction": DECOMPOSITION_SYSTEM_PROMPT,
+                }
+                raw_model = self.llm_client.generate_structured(**fallback_kwargs)
             else:
                 raise
 

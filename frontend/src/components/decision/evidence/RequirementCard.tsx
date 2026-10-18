@@ -42,10 +42,15 @@ function getKindBadge(kind: EvidenceKind) {
         label: "Deterministic Calculation",
         className: "bg-teal-950/50 text-teal-300 border-teal-800/60",
       };
+    default:
+      return {
+        label: kind ? String(kind) : "General Requirement",
+        className: "bg-zinc-900 text-zinc-300 border-zinc-700",
+      };
   }
 }
 
-function getStatusBadge(status: RequirementStatus) {
+function getStatusBadge(status?: RequirementStatus) {
   switch (status) {
     case "fulfilled":
       return {
@@ -76,6 +81,12 @@ function getStatusBadge(status: RequirementStatus) {
         label: "Inconclusive",
         className: "bg-zinc-800 text-zinc-300 border-zinc-700",
         dotColor: "bg-zinc-400",
+      };
+    default:
+      return {
+        label: status ? String(status) : "Pending",
+        className: "bg-zinc-800 text-zinc-300 border-zinc-700",
+        dotColor: "bg-zinc-500",
       };
   }
 }

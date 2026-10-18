@@ -155,7 +155,7 @@ def test_regression_inferred_ltv_cac_not_hard_constraint() -> None:
 
 def test_regression_normal_test_cannot_call_real_gemini() -> None:
     """Regression 9D: Normal test execution cannot instantiate/call unmocked Gemini provider."""
-    client = GeminiLLMClient(api_key="AIzaSy-fake-unmocked-key")
+    client = GeminiLLMClient(project="test-proj", location="us-central1")
     with pytest.raises(RuntimeError) as exc_info:
         client.generate_structured(
             prompt="Should we cut prices?",

@@ -1,11 +1,16 @@
 "use client";
 
 import React from "react";
-import { DecisionFormData } from "@/types";
+import { DecisionFormData, JobStatus, PipelineStage } from "@/types";
+import { StageAwareProgress } from "./StageAwareProgress";
 
 interface DecisionFormProps {
   formData: DecisionFormData;
   isLoading: boolean;
+  jobStatus?: JobStatus | null;
+  pipelineStage?: PipelineStage | null;
+  progressMessage?: string | null;
+  jobId?: string | null;
   validationError: string | null;
   apiError: string | null;
   apiErrorStatusCode?: number | null;
@@ -13,11 +18,17 @@ interface DecisionFormProps {
   onSubmit: (e: React.FormEvent) => void;
   onReset: () => void;
   onClearError: () => void;
+  onRetry?: () => void;
+  onStop?: () => void;
 }
 
 export function DecisionForm({
   formData,
   isLoading,
+  jobStatus,
+  pipelineStage,
+  progressMessage,
+  jobId,
   validationError,
   apiError,
   apiErrorStatusCode,
@@ -25,6 +36,8 @@ export function DecisionForm({
   onSubmit,
   onReset,
   onClearError,
+  onRetry,
+  onStop,
 }: DecisionFormProps) {
   const isFormDirty =
     Boolean(formData.question.trim()) ||
@@ -54,15 +67,19 @@ export function DecisionForm({
         </div>
       )}
 
-      {apiError && (
+      {apiError && !jobStatus && (
         <div
           role="alert"
           className="rounded-lg border border-red-800/50 bg-red-950/30 p-4 text-xs text-red-200 space-y-1.5"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-red-300">Analysis Error</span>
-              {apiErrorStatusCode && (
+              <span className="font-semibold text-red-300">
+                {apiErrorStatusCode === 504
+                  ? "503 — AI Service Temporarily Unavailable"
+                  : "Analysis Error"}
+              </span>
+              {apiErrorStatusCode && apiErrorStatusCode !== 504 && (
                 <span className="rounded bg-red-900/60 px-1.5 py-0.5 text-[10px] font-mono font-medium text-red-200 border border-red-800/60">
                   HTTP {apiErrorStatusCode}
                 </span>
@@ -77,7 +94,11 @@ export function DecisionForm({
               &times;
             </button>
           </div>
-          <p className="text-red-300/90 leading-relaxed font-sans">{apiError}</p>
+          <p className="text-red-300/90 leading-relaxed font-sans">
+            {apiErrorStatusCode === 504
+              ? "Gemini may be experiencing high traffic or taking longer than expected to respond. Your analysis couldn't be completed in time. Please try again shortly."
+              : apiError}
+          </p>
         </div>
       )}
 
@@ -183,6 +204,21 @@ export function DecisionForm({
             )}
           </button>
 
+          {/* Stop Analyzing button during active processing */}
+          {isLoading && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-800/70 bg-rose-950/40 px-4 py-2.5 text-sm font-semibold text-rose-200 hover:bg-rose-900/60 hover:text-white transition-colors cursor-pointer shadow-sm active:scale-95"
+              aria-label="Stop active analysis"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+              <span>Stop Analyzing</span>
+            </button>
+          )}
+
           {/* Reset button */}
           {isFormDirty && !isLoading && (
             <button
@@ -195,27 +231,24 @@ export function DecisionForm({
           )}
         </div>
 
-        <span className="text-[11px] text-zinc-500 sm:text-right font-mono">
-          Calls FastAPI <code className="text-zinc-400">/api/analyze</code>
+        <span className="text-xs text-zinc-400 sm:text-right flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          <span>Autonomous 6-Stage Deliberation</span>
         </span>
       </div>
 
-      {/* Truthful Loading State Callout */}
-      {isLoading && (
-        <div
-          role="status"
-          className="rounded-xl border border-zinc-800/90 bg-zinc-950/70 p-4 text-xs text-zinc-300 flex items-start gap-3"
-        >
-          <span className="flex h-2 w-2 rounded-full bg-indigo-400 mt-1 shrink-0 animate-ping" />
-          <div className="space-y-1">
-            <p className="font-medium text-zinc-200">
-              AURA is structuring the decision and gathering relevant evidence.
-            </p>
-            <p className="text-zinc-400 leading-relaxed font-sans">
-              This analysis performs multi-source research and factual evidence mapping; it may take a little while.
-            </p>
-          </div>
-        </div>
+      {/* Stage-Aware Progress & Error Callout */}
+      {(isLoading || jobStatus === "succeeded" || jobStatus === "failed" || jobStatus === "timed_out") && (
+        <StageAwareProgress
+          status={jobStatus ?? (isLoading ? "running" : null)}
+          stage={pipelineStage ?? null}
+          progressMessage={progressMessage}
+          jobId={jobId}
+          error={apiError}
+          errorStatusCode={apiErrorStatusCode}
+          onRetry={onRetry}
+          onStop={onStop}
+        />
       )}
     </form>
   );

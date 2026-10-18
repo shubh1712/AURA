@@ -1,0 +1,42 @@
+# Google Cloud Buildpack ignore file for AURA Root
+.gcloudignore
+.git
+.gitignore
+
+# Environment variables and secrets
+.env
+.env.*
+.env.local
+.env*.local
+!.env.example
+!.env.template
+
+# Local SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+aura_jobs.db
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node dependencies and builds
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Scratch & development dumps
+scratch/
+logs/
+*.log

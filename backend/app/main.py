@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api.routes.health import router as health_router
 from app.api.routes.analysis import router as analysis_router
+from app.api.routes.analysis_jobs import router as jobs_router
+from app.api.routes.simulation import router as simulation_router
+from app.api.routes.action_intelligence import router as action_intelligence_router
+from app.api.routes.internal_tasks import router as internal_tasks_router
 
 
 def create_application() -> FastAPI:
@@ -32,6 +36,19 @@ def create_application() -> FastAPI:
     app.include_router(health_router)
     # POST /api/analyze
     app.include_router(analysis_router, prefix=settings.API_V1_STR)
+    # POST /api/analysis/jobs, GET /api/analysis/jobs/{job_id}, GET /api/analysis/jobs/{job_id}/result
+    app.include_router(jobs_router, prefix=settings.API_V1_STR)
+    # Also support un-prefixed paths: POST /analysis/jobs, GET /analysis/jobs/{job_id}, etc.
+    app.include_router(jobs_router)
+    # Day 7 Phase 7B What-if Simulation routes
+    app.include_router(simulation_router, prefix=settings.API_V1_STR)
+    app.include_router(simulation_router)
+    # Day 8 Phase 8A Action Intelligence routes
+    app.include_router(action_intelligence_router, prefix=settings.API_V1_STR)
+    app.include_router(action_intelligence_router)
+    # Day 9 Phase 3 Cloud Tasks internal worker routes
+    app.include_router(internal_tasks_router, prefix=settings.API_V1_STR)
+    app.include_router(internal_tasks_router)
 
     return app
 

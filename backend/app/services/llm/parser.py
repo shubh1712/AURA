@@ -9,7 +9,7 @@ epistemic integrity (distinguishing user-stated facts from model inferences).
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.schemas.decision_model import (
@@ -25,6 +25,9 @@ from app.schemas.decision_model import (
 from app.services.llm.client import LLMResponseValidationError
 
 T = TypeVar("T", bound=BaseModel)
+
+VALID_MAPPING_STANCE_LITERALS = {"supports", "challenges", "context", "inconclusive"}
+VALID_MAPPING_CONFIDENCE_LITERALS = {"low", "medium", "high", "untested"}
 
 
 # ------------------------------------------------------------------------------
@@ -93,7 +96,10 @@ class StructuredOutputParser:
             LLMResponseValidationError: If no JSON object or array structure can be located.
         """
         if not raw_text or not raw_text.strip():
-            raise LLMResponseValidationError("LLM returned empty or whitespace-only response.")
+            raise LLMResponseValidationError(
+                "LLM returned empty or whitespace-only response.",
+                category="json_parse_error",
+            )
 
         text = raw_text.strip()
 
@@ -125,7 +131,8 @@ class StructuredOutputParser:
 
         raise LLMResponseValidationError(
             f"No valid JSON structure found in LLM output. Raw snippet: {text[:200]!r}",
-            details={"raw_output": text[:500]},
+            details={"raw_output": text[:500], "category": "json_parse_error"},
+            category="json_parse_error",
         )
 
     @classmethod
@@ -159,7 +166,9 @@ class StructuredOutputParser:
                     "colno": e.colno,
                     "pos": e.pos,
                     "extracted_snippet": extracted[:500],
+                    "category": "json_parse_error",
                 },
+                category="json_parse_error",
             ) from e
 
     @classmethod
@@ -407,6 +416,367 @@ class StructuredOutputParser:
         return sanitized
 
     @classmethod
+    def sanitize_evidence_mapping_dict(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Safely normalizes unambiguous enum casing and whitespace for CandidateBatchEvidenceMappingPayload.
+
+        Allowlisted transformations:
+        - Case-normalization and whitespace trimming for known EvidenceStance literals ('supports', 'challenges', 'context', 'inconclusive').
+        - Case-normalization and whitespace trimming for known ConfidenceLevel literals ('low', 'medium', 'high', 'untested').
+        - Coerces None for array container fields ('findings', 'numeric_data') to empty lists [].
+        - Coerces uninformative placeholder values ('', 'none', 'null', 'n/a', 'undefined') on optional numeric and reference fields to None.
+        - Coerces sample_size=0 (reporting no sample size) to None to satisfy ge=1.
+        - Safely truncates strings exceeding schema max_length boundaries (summary <= 500).
+
+        Strictly preserves:
+        - Non-mutating: creates a new dictionary structure; input data is not modified.
+        - Zero key stripping: extra/unknown keys are preserved so extra="forbid" strictly fails validation.
+        - Zero numeric value fabrication/coercion: string formatted numbers ('14%') are not coerced.
+        - Zero content modification: factual content excerpts, reasoning narratives, and valid numeric values are untouched.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = dict(data)
+        findings_raw = cleaned.get("findings")
+        if findings_raw is None:
+            cleaned["findings"] = []
+            return cleaned
+
+        if not isinstance(findings_raw, list):
+            return cleaned
+
+        cleaned_findings: List[Any] = []
+        for item in findings_raw:
+            if not isinstance(item, dict):
+                cleaned_findings.append(item)
+                continue
+
+            finding_copy = dict(item)
+
+            # 1. Normalize stance if present and is a string
+            stance_val = finding_copy.get("stance")
+            if isinstance(stance_val, str):
+                s_clean = stance_val.strip().lower()
+                if s_clean in VALID_MAPPING_STANCE_LITERALS:
+                    finding_copy["stance"] = s_clean
+
+            # 2. Normalize extraction_confidence if present and is a string
+            ext_conf = finding_copy.get("extraction_confidence")
+            if isinstance(ext_conf, str):
+                c_clean = ext_conf.strip().lower()
+                if c_clean in VALID_MAPPING_CONFIDENCE_LITERALS:
+                    finding_copy["extraction_confidence"] = c_clean
+
+            # 3. Normalize relationship_confidence if present and is a string
+            rel_conf = finding_copy.get("relationship_confidence")
+            if isinstance(rel_conf, str):
+                r_clean = rel_conf.strip().lower()
+                if r_clean in VALID_MAPPING_CONFIDENCE_LITERALS:
+                    finding_copy["relationship_confidence"] = r_clean
+
+            # 4. Normalize target_entity_id placeholders and deterministic canonical ID reconciliation
+            t_id = finding_copy.get("target_entity_id")
+            from app.services.evidence.mapper import reconcile_target_entity_id
+            finding_copy["target_entity_id"] = reconcile_target_entity_id(t_id)
+
+            # 5. Normalize summary length boundary (max 500) and placeholders
+            summary_val = finding_copy.get("summary")
+            if isinstance(summary_val, str):
+                sum_stripped = summary_val.strip()
+                if sum_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
+                    finding_copy["summary"] = None
+                elif len(sum_stripped) > 500:
+                    finding_copy["summary"] = sum_stripped[:497] + "..."
+                else:
+                    finding_copy["summary"] = sum_stripped
+
+            # 6. Normalize numeric_data array and individual numeric items
+            num_raw = finding_copy.get("numeric_data")
+            if num_raw is None:
+                finding_copy["numeric_data"] = []
+            elif isinstance(num_raw, list):
+                clean_nums: List[Any] = []
+                for n_item in num_raw:
+                    if not isinstance(n_item, dict):
+                        clean_nums.append(n_item)
+                        continue
+                    n_copy = dict(n_item)
+
+                    # sample_size: 0 or placeholder -> None
+                    s_sz = n_copy.get("sample_size")
+                    if s_sz == 0:
+                        n_copy["sample_size"] = None
+                    elif isinstance(s_sz, str) and s_sz.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["sample_size"] = None
+
+                    # value placeholders -> None
+                    v_val = n_copy.get("value")
+                    if isinstance(v_val, str) and v_val.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["value"] = None
+
+                    # range_min / range_max placeholders -> None
+                    rmin = n_copy.get("range_min")
+                    if isinstance(rmin, str) and rmin.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["range_min"] = None
+                    rmax = n_copy.get("range_max")
+                    if isinstance(rmax, str) and rmax.strip().lower() in ("", "none", "null", "n/a", "undefined"):
+                        n_copy["range_max"] = None
+
+                    # unit / confidence_interval / context string lengths and placeholders
+                    unit_val = n_copy.get("unit")
+                    if isinstance(unit_val, str):
+                        u_strip = unit_val.strip()
+                        if u_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["unit"] = None
+                        elif len(u_strip) > 30:
+                            n_copy["unit"] = u_strip[:30]
+                        else:
+                            n_copy["unit"] = u_strip
+
+                    ci_val = n_copy.get("confidence_interval")
+                    if isinstance(ci_val, str):
+                        ci_strip = ci_val.strip()
+                        if ci_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["confidence_interval"] = None
+                        elif len(ci_strip) > 100:
+                            n_copy["confidence_interval"] = ci_strip[:100]
+                        else:
+                            n_copy["confidence_interval"] = ci_strip
+
+                    ctx_val = n_copy.get("context")
+                    if isinstance(ctx_val, str):
+                        ctx_strip = ctx_val.strip()
+                        if ctx_strip.lower() in ("", "none", "null", "n/a", "undefined"):
+                            n_copy["context"] = None
+                        elif len(ctx_strip) > 300:
+                            n_copy["context"] = ctx_strip[:300]
+                        else:
+                            n_copy["context"] = ctx_strip
+
+                    m_name = n_copy.get("metric_name")
+                    if isinstance(m_name, str) and len(m_name) > 100:
+                        n_copy["metric_name"] = m_name[:100]
+
+                    clean_nums.append(n_copy)
+                finding_copy["numeric_data"] = clean_nums
+
+            cleaned_findings.append(finding_copy)
+
+        cleaned["findings"] = cleaned_findings
+        return cleaned
+
+    @classmethod
+    def sanitize_perspective_analysis_dict(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitizes candidate perspective analysis dictionary before Pydantic validation.
+
+        Ensures casing, whitespace, empty/placeholder collections, and epistemic basis
+        conformance to prevent spurious validation failures on LLM structured output.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = dict(data)
+
+
+
+        # 2. Normalize summary
+        summary_val = cleaned.get("summary")
+        if isinstance(summary_val, str):
+            cleaned["summary"] = summary_val.strip()
+
+        # 3. Normalize top-level list fields
+        for field in [
+            "critical_assumption_ids",
+            "evidence_gap_ids",
+            "unresolved_questions",
+            "limitations",
+            "opportunities",
+            "concerns",
+        ]:
+            val = cleaned.get(field)
+            if val is None:
+                cleaned[field] = []
+            elif isinstance(val, list):
+                cleaned[field] = [
+                    str(item).strip()
+                    for item in val
+                    if isinstance(item, (str, int, float)) and str(item).strip().lower() not in ("", "none", "null", "n/a", "undefined")
+                ]
+            elif isinstance(val, str):
+                cleaned[field] = [] if val.strip().lower() in ("", "none", "null", "n/a", "undefined") else [val.strip()]
+
+        # 4. Normalize arguments
+        raw_args = cleaned.get("arguments")
+        if raw_args is None:
+            cleaned["arguments"] = []
+        elif isinstance(raw_args, list):
+            cleaned_args: List[Dict[str, Any]] = []
+            for arg_item in raw_args:
+                if not isinstance(arg_item, dict):
+                    continue
+                arg_copy = dict(arg_item)
+
+                # Strings
+                for str_field in ["claim", "reasoning", "caveat"]:
+                    s_val = arg_copy.get(str_field)
+                    if isinstance(s_val, str):
+                        s_stripped = s_val.strip()
+                        if str_field == "caveat" and s_stripped.lower() in ("", "none", "null", "n/a", "undefined"):
+                            arg_copy["caveat"] = None
+                        else:
+                            arg_copy[str_field] = s_stripped
+
+                # Direction
+                d_val = arg_copy.get("direction")
+                if isinstance(d_val, str):
+                    arg_copy["direction"] = d_val.strip().lower()
+
+                # Basis
+                b_val = arg_copy.get("basis")
+                basis_str = b_val.strip().lower() if isinstance(b_val, str) else "inference"
+                arg_copy["basis"] = basis_str
+
+                # Normalize reference lists
+                for list_field in [
+                    "evidence_item_ids",
+                    "requirement_ids",
+                    "assumption_ids",
+                    "unknown_ids",
+                    "evidence_gap_ids",
+                    "related_entity_ids",
+                ]:
+                    l_val = arg_copy.get(list_field)
+                    if l_val is None:
+                        arg_copy[list_field] = []
+                    elif isinstance(l_val, list):
+                        arg_copy[list_field] = [
+                            str(item).strip()
+                            for item in l_val
+                            if isinstance(item, (str, int, float)) and str(item).strip().lower() not in ("", "none", "null", "n/a", "undefined")
+                        ]
+                    elif isinstance(l_val, str):
+                        arg_copy[list_field] = [] if l_val.strip().lower() in ("", "none", "null", "n/a", "undefined") else [l_val.strip()]
+                    else:
+                        arg_copy[list_field] = []
+
+                # Epistemic basis reconciliation without fabricating citations:
+                e_ids = arg_copy["evidence_item_ids"]
+                a_ids = arg_copy["assumption_ids"]
+                u_ids = arg_copy["unknown_ids"]
+                g_ids = arg_copy["evidence_gap_ids"]
+                r_ids = arg_copy["requirement_ids"]
+                has_unresolved = bool(u_ids or g_ids or r_ids)
+
+                if basis_str == "evidence" and not e_ids:
+                    if a_ids and not has_unresolved:
+                        arg_copy["basis"] = "assumption"
+                    elif has_unresolved and not a_ids:
+                        arg_copy["basis"] = "unresolved"
+                    elif a_ids and has_unresolved:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "assumption" and not a_ids:
+                    if e_ids and not has_unresolved:
+                        arg_copy["basis"] = "evidence"
+                    elif has_unresolved and not e_ids:
+                        arg_copy["basis"] = "unresolved"
+                    elif e_ids and has_unresolved:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "unresolved" and not has_unresolved:
+                    if e_ids and not a_ids:
+                        arg_copy["basis"] = "evidence"
+                    elif a_ids and not e_ids:
+                        arg_copy["basis"] = "assumption"
+                    elif e_ids and a_ids:
+                        arg_copy["basis"] = "mixed"
+                    else:
+                        arg_copy["basis"] = "inference"
+
+                elif basis_str == "mixed":
+                    cat_count = sum([bool(e_ids), bool(a_ids), has_unresolved])
+                    if cat_count < 2:
+                        if bool(e_ids):
+                            arg_copy["basis"] = "evidence"
+                        elif bool(a_ids):
+                            arg_copy["basis"] = "assumption"
+                        elif has_unresolved:
+                            arg_copy["basis"] = "unresolved"
+                        else:
+                            arg_copy["basis"] = "inference"
+
+                cleaned_args.append(arg_copy)
+
+            cleaned["arguments"] = cleaned_args
+
+        return cleaned
+
+    @classmethod
+    def classify_validation_error(
+        cls, e: ValidationError
+    ) -> Tuple[str, List[str], List[str]]:
+        """Sanitized, privacy-preserving classification of Pydantic validation failures.
+
+        Returns:
+            Tuple of (primary_category, all_unique_categories, sanitized_field_paths).
+        """
+        type_map = {
+            "missing": "missing_required_field",
+            "extra_forbidden": "extra_forbidden",
+            "enum": "enum_mismatch",
+            "literal_error": "enum_mismatch",
+            "float_parsing": "numeric_type_error",
+            "int_parsing": "numeric_type_error",
+            "float_type": "numeric_type_error",
+            "int_type": "numeric_type_error",
+            "number_type": "numeric_type_error",
+            "value_error": "value_error",
+        }
+        categories: List[str] = []
+        field_paths: List[str] = []
+        for err in e.errors():
+            err_type = err.get("type", "")
+            cat = type_map.get(err_type, "other_pydantic_error")
+            categories.append(cat)
+            loc = err.get("loc", ())
+            loc_str = ".".join(str(l) for l in loc)
+            # If loc points to a sequence item without a child field name (e.g. ('arguments', 0)),
+            # inspect the message for a known child field to report precise nested field paths.
+            msg = str(err.get("msg", ""))
+            if len(loc) == 2 and isinstance(loc[1], int):
+                if "evidence_item_id" in msg:
+                    loc_str = f"{loc_str}.evidence_item_ids"
+                elif "assumption_id" in msg:
+                    loc_str = f"{loc_str}.assumption_ids"
+                elif "unresolved" in msg or "unknown_id" in msg or "evidence_gap_id" in msg:
+                    loc_str = f"{loc_str}.unknown_ids"
+                elif "mixed" in msg:
+                    loc_str = f"{loc_str}.basis"
+                elif "basis" in msg:
+                    loc_str = f"{loc_str}.basis"
+            field_paths.append(loc_str)
+
+        priority = [
+            "extra_forbidden",
+            "missing_required_field",
+            "enum_mismatch",
+            "numeric_type_error",
+            "value_error",
+            "other_pydantic_error",
+        ]
+        primary = "other_pydantic_error"
+        for p in priority:
+            if p in categories:
+                primary = p
+                break
+
+        return primary, list(dict.fromkeys(categories)), field_paths
+
+    @classmethod
     def parse_and_validate(
         cls,
         raw_text: str,
@@ -436,11 +806,34 @@ class StructuredOutputParser:
         if not isinstance(parsed_json, dict):
             raise LLMResponseValidationError(
                 f"LLM output must be a JSON object, but got {type(parsed_json).__name__}.",
-                details={"parsed_type": type(parsed_json).__name__},
+                details={"parsed_type": type(parsed_json).__name__, "category": "root_type_error"},
+                category="root_type_error",
             )
 
-        # Step 2: Apply schema-specific sanitization if target is DecisionModel
-        if issubclass(response_schema, DecisionModel):
+        # Step 2: Apply schema-specific sanitization
+        try:
+            from app.services.evidence.mapper import CandidateBatchEvidenceMappingPayload
+            is_evidence_mapping = (
+                isinstance(response_schema, type)
+                and issubclass(response_schema, CandidateBatchEvidenceMappingPayload)
+            )
+        except Exception:
+            is_evidence_mapping = False
+
+        try:
+            from app.schemas.reasoning import CandidatePerspectiveAnalysis
+            is_perspective_analysis = (
+                isinstance(response_schema, type)
+                and issubclass(response_schema, CandidatePerspectiveAnalysis)
+            )
+        except Exception:
+            is_perspective_analysis = False
+
+        if is_evidence_mapping:
+            sanitized_data = cls.sanitize_evidence_mapping_dict(parsed_json)
+        elif is_perspective_analysis:
+            sanitized_data = cls.sanitize_perspective_analysis_dict(parsed_json)
+        elif issubclass(response_schema, DecisionModel):
             sanitized_data = cls.sanitize_decision_model_dict(
                 parsed_json,
                 raw_user_prompt=raw_user_prompt,
@@ -471,13 +864,33 @@ class StructuredOutputParser:
                 f"Validation failed for schema {response_schema.__name__}:\n"
                 + "\n".join(formatted_errors)
             )
+            error_types = [err.get("type", "") for err in e.errors()]
+            primary_cat, all_cats, field_paths = cls.classify_validation_error(e)
+
+            constraints: List[Dict[str, Any]] = []
+            for err in e.errors():
+                err_type = err.get("type", "")
+                loc_str = ".".join(str(l) for l in err.get("loc", ()))
+                ctx = err.get("ctx")
+                c_info: Dict[str, Any] = {"field": loc_str, "type": err_type}
+                if isinstance(ctx, dict):
+                    for k in ("max_length", "min_length", "gt", "ge", "lt", "le", "multiple_of", "expected"):
+                        if k in ctx:
+                            c_info[k] = ctx[k]
+                constraints.append(c_info)
+
             raise LLMResponseValidationError(
                 error_summary,
                 details={
                     "schema": response_schema.__name__,
-                    "errors": e.errors(),
-                    "sanitized_payload": sanitized_data,
+                    "category": primary_cat,
+                    "categories": all_cats,
+                    "error_types": error_types,
+                    "field_paths": field_paths,
+                    "constraints": constraints,
+                    "error_count": len(e.errors()),
                 },
+                category=primary_cat,
             ) from e
 
 

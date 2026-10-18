@@ -1,0 +1,29 @@
+# Google Cloud Buildpack ignore file for AURA Frontend
+.gcloudignore
+.git
+.gitignore
+
+# Environment variables and local configuration
+.env
+.env.*
+.env.local
+.env*.local
+!.env.example
+
+# Local dependencies and build caches (built inside Cloud Buildpack)
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+
+# TypeScript and linter caches
+*.tsbuildinfo
+next-env.d.ts.bak
+
+# Test coverage and logs
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

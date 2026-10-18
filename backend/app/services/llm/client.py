@@ -49,7 +49,15 @@ class LLMRateLimitError(LLMError):
 
 class LLMResponseValidationError(LLMError):
     """Raised when the LLM output fails to conform to the requested Pydantic schema."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+        category: Optional[str] = None,
+    ) -> None:
+        super().__init__(message, details=details)
+        self.category = category or (details.get("category") if details else None) or "other_pydantic_error"
 
 
 class LLMProviderError(LLMError):
@@ -87,7 +95,7 @@ class LLMConfig(BaseModel):
         description="Maximum tokens allowed in generation.",
     )
     timeout_seconds: float = Field(
-        default=45.0,
+        default=30.0,
         gt=0.0,
         description="Maximum duration in seconds before terminating an individual HTTP request.",
     )
@@ -100,6 +108,10 @@ class LLMConfig(BaseModel):
         default=2,
         ge=0,
         description="Number of retry attempts on transient network or rate-limit failures.",
+    )
+    stage: Optional[str] = Field(
+        default=None,
+        description="Optional pipeline stage name for telemetry and diagnostics.",
     )
 
 
@@ -240,22 +252,26 @@ class FakeLLMClient(LLMClient):
         self._canned_responses: Dict[Type[BaseModel], BaseModel] = {}
         self._canned_error: Optional[Exception] = None
         self.call_history: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
     def register_response(self, schema_cls: Type[T], response_instance: T) -> None:
         """Registers a fixed response to return when schema_cls is requested."""
         if not isinstance(response_instance, schema_cls):
             raise ValueError(f"Instance must match registered schema {schema_cls.__name__}")
-        self._canned_responses[schema_cls] = response_instance
+        with self._lock:
+            self._canned_responses[schema_cls] = response_instance
 
     def register_error(self, error: Exception) -> None:
         """Forces the next call to raise the specified exception."""
-        self._canned_error = error
+        with self._lock:
+            self._canned_error = error
 
     def clear(self) -> None:
         """Clears canned responses, errors, and history."""
-        self._canned_responses.clear()
-        self._canned_error = None
-        self.call_history.clear()
+        with self._lock:
+            self._canned_responses.clear()
+            self._canned_error = None
+            self.call_history.clear()
 
     def generate_structured(
         self,
@@ -267,13 +283,14 @@ class FakeLLMClient(LLMClient):
     ) -> T:
         cfg = config or DEFAULT_LLM_CONFIG
 
-        self.call_history.append({
-            "prompt": prompt,
-            "response_schema": response_schema,
-            "system_instruction": system_instruction,
-            "config": cfg,
-            "deadline_monotonic": deadline_monotonic,
-        })
+        with self._lock:
+            self.call_history.append({
+                "prompt": prompt,
+                "response_schema": response_schema,
+                "system_instruction": system_instruction,
+                "config": cfg,
+                "deadline_monotonic": deadline_monotonic,
+            })
 
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise LLMTimeoutError(
@@ -281,13 +298,14 @@ class FakeLLMClient(LLMClient):
                 details={"deadline_monotonic": deadline_monotonic},
             )
 
-        if self._canned_error:
-            err = self._canned_error
-            self._canned_error = None
-            raise err
+        with self._lock:
+            if self._canned_error:
+                err = self._canned_error
+                self._canned_error = None
+                raise err
 
-        if response_schema in self._canned_responses:
-            return self._canned_responses[response_schema]  # type: ignore
+            if response_schema in self._canned_responses:
+                return self._canned_responses[response_schema]  # type: ignore
 
         if self.default_response and isinstance(self.default_response, response_schema):
             return self.default_response  # type: ignore
@@ -316,6 +334,80 @@ class FakeLLMClient(LLMClient):
             if issubclass(response_schema, CandidateEvidenceMappingPayload):
                 from app.services.evidence.mapper import get_default_candidate_findings
                 return get_default_candidate_findings(prompt)  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidatePerspectiveAnalysis, construct realistic candidate perspective
+        try:
+            from app.schemas.reasoning import CandidatePerspectiveAnalysis, PerspectiveType
+            if issubclass(response_schema, CandidatePerspectiveAnalysis):
+                ptype = PerspectiveType.GROWTH
+                sys_inst = (system_instruction or "").lower()
+                for pt in (PerspectiveType.FINANCE, PerspectiveType.CUSTOMER, PerspectiveType.RISK, PerspectiveType.GROWTH):
+                    if pt.value in sys_inst:
+                        ptype = pt
+                        break
+                return CandidatePerspectiveAnalysis(
+                    perspective_type=ptype,
+                    summary=f"Automated evaluation from {ptype.value} perspective.",
+                    arguments=[],
+                    critical_assumption_ids=[],
+                    evidence_gap_ids=[],
+                    unresolved_questions=[],
+                    limitations=[],
+                    opportunities=[],
+                    concerns=[],
+                )  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateBoardSynthesis, construct realistic candidate synthesis
+        try:
+            from app.schemas.reasoning import CandidateBoardSynthesis
+            if issubclass(response_schema, CandidateBoardSynthesis):
+                return CandidateBoardSynthesis(
+                    summary="Reconciliation of board deliberation across canonical perspectives.",
+                    areas_of_agreement=["Common strategic alignment on baseline objectives."],
+                    disagreement_ids=[],
+                    critical_assumption_ids=[],
+                    critical_evidence_gap_ids=[],
+                    evidence_sensitive_points=[],
+                    unresolved_questions=[],
+                )  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateDecisionRecommendation, construct realistic candidate recommendation
+        try:
+            from app.schemas.recommendation import CandidateDecisionRecommendation
+            if issubclass(response_schema, CandidateDecisionRecommendation):
+                from app.services.llm.mock_data import get_default_candidate_recommendation
+                return get_default_candidate_recommendation()  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateScenarioSet, construct realistic candidate scenario set
+        try:
+            from app.schemas.scenario import CandidateScenarioSet
+            if issubclass(response_schema, CandidateScenarioSet):
+                from app.services.llm.mock_data import get_default_candidate_scenario_set
+                return get_default_candidate_scenario_set()  # type: ignore
+        except ImportError:
+            pass
+
+        # If requesting CandidateSimulationExplanation, construct realistic candidate simulation explanation
+        try:
+            from app.schemas.simulation import CandidateSimulationExplanation
+            if issubclass(response_schema, CandidateSimulationExplanation):
+                return CandidateSimulationExplanation(
+                    summary="Deterministic simulation evaluated variable adjustment against baseline constraints.",
+                    what_changed=["Adjusted candidate model variables from baseline values."],
+                    constraint_implications=["Evaluated constraint threshold boundaries and safety margins."],
+                    resilience_interpretation="Resilience evaluation reflects engine calculations without fabricated projections.",
+                    limitations=["Simulations evaluate isolated parameter sensitivity and do not model uncaptured externalities."],
+                    suggested_validation_steps=["Empirically benchmark proposed values before committing to production changes."],
+                    evidence_or_artifact_references=[],
+                )  # type: ignore
         except ImportError:
             pass
 

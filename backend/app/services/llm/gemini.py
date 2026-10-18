@@ -10,6 +10,7 @@ this service module.
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -42,6 +43,20 @@ from app.services.llm.client import (
 from app.services.llm.parser import parse_and_validate_structured_output
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _sanitize_diagnostic_text(text: Optional[str]) -> str:
+    """Sanitizes text for diagnostic logs and errors, redacting credentials and truncating length."""
+    if not text:
+        return ""
+    s = str(text).strip()
+    s = re.sub(r'AIza[0-9A-Za-z_\-]{20,}', '[REDACTED_API_KEY]', s)
+    s = re.sub(r'ya29\.[0-9A-Za-z_\-]+', '[REDACTED_TOKEN]', s)
+    s = re.sub(r'(?i)\b(?:bearer|key|token|api_key|secret|password)\s*[:=]\s*[^\s,;]+', '[REDACTED_CREDENTIAL]', s)
+    s = re.sub(r'(?i)\bbearer\s+[^\s,;]+', '[REDACTED_TOKEN]', s)
+    if len(s) > 500:
+        s = s[:497] + "..."
+    return s
 
 
 class GeminiLLMClient(LLMClient):
@@ -198,18 +213,41 @@ class GeminiLLMClient(LLMClient):
             return float(retry_after_attr)
         return None
 
-    @staticmethod
-    def _clean_schema_for_transport(schema: Any) -> Any:
-        """Removes purely informational metadata (e.g., title) from JSON schema for wire transport."""
-        if isinstance(schema, dict):
-            return {
-                k: GeminiLLMClient._clean_schema_for_transport(v)
-                for k, v in schema.items()
-                if k != "title"
-            }
-        if isinstance(schema, list):
-            return [GeminiLLMClient._clean_schema_for_transport(item) for item in schema]
-        return schema
+    @classmethod
+    def _clean_schema_for_transport(
+        cls,
+        schema: Any,
+        response_schema: Optional[Type[BaseModel]] = None,
+    ) -> Any:
+        """Removes purely informational metadata (e.g., title) from JSON schema for wire transport.
+
+        When response_schema is DecisionModel, applies narrow safe description compaction
+        to reduce wire payload without altering field semantics, types, or validation contracts.
+        Preserves schema properties named 'title' inside 'properties' dictionaries.
+        """
+        def _strip_titles(s: Any, parent_key: Optional[str] = None) -> Any:
+            if isinstance(s, dict):
+                return {
+                    k: _strip_titles(v, parent_key=k)
+                    for k, v in s.items()
+                    if not (k == "title" and parent_key != "properties" and isinstance(v, str))
+                }
+            if isinstance(s, list):
+                return [_strip_titles(item, parent_key=parent_key) for item in s]
+            return s
+
+        cleaned = _strip_titles(schema)
+
+        if response_schema is not None:
+            try:
+                from app.schemas.decision_model import DecisionModel
+                if isinstance(response_schema, type) and issubclass(response_schema, DecisionModel):
+                    from app.services.llm.transport_schema import compact_decision_model_schema_for_transport
+                    return compact_decision_model_schema_for_transport(cleaned)
+            except Exception:
+                pass
+
+        return cleaned
 
     def generate_structured(
         self,
@@ -249,11 +287,33 @@ class GeminiLLMClient(LLMClient):
         diagnostics_enabled = os.environ.get("AURA_LLM_DIAGNOSTICS") == "1"
         t0_schema = time.monotonic() if diagnostics_enabled else 0.0
         raw_schema = response_schema.model_json_schema()
-        schema_dict = self._clean_schema_for_transport(raw_schema)
+        schema_dict = self._clean_schema_for_transport(raw_schema, response_schema=response_schema)
         t_schema = (time.monotonic() - t0_schema) if diagnostics_enabled else 0.0
-        schema_chars = len(json.dumps(schema_dict)) if diagnostics_enabled else 0
+
+        stage = getattr(cfg, "stage", None) if cfg else None
+        if not stage and response_schema is not None:
+            schema_name = getattr(response_schema, "__name__", "")
+            if "Recommendation" in schema_name:
+                stage = "recommendation"
+            elif "Synthesis" in schema_name:
+                stage = "synthesis"
+            elif "Perspective" in schema_name:
+                stage = "perspective_evaluation"
+            elif "Requirements" in schema_name:
+                stage = "evidence_requirements"
+            elif "Evidence" in schema_name:
+                stage = "evidence_mapping"
+            elif "DecisionModel" in schema_name:
+                stage = "framing"
+            else:
+                stage = schema_name or "unknown"
+        elif not stage:
+            stage = "unknown"
+
+        schema_chars = len(json.dumps(schema_dict))
         sys_prompt_chars = len(system_instruction) if system_instruction else 0
         user_prompt_chars = len(prompt)
+        total_payload_chars = user_prompt_chars + sys_prompt_chars + schema_chars
 
         response_format = {
             "type": "text",
@@ -282,73 +342,190 @@ class GeminiLLMClient(LLMClient):
 
         attempts = 0
         max_attempts = max(1, 1 + (cfg.max_retries if cfg.max_retries is not None else 0))
+        attempt_records: List[Dict[str, Any]] = []
 
-        def _do_backoff(attempt_idx: int, retry_after: Optional[float] = None) -> None:
+        def _determine_timeout_source(now: float) -> str:
+            if (deadline - now) <= 0:
+                if deadline_monotonic is not None and deadline_monotonic <= local_deadline:
+                    return "parent"
+                return "operation"
+            return "request"
+
+        def _record_attempt(
+            status: str,
+            error_category: Optional[str],
+            t_start: float,
+            t_end: float,
+            effective_timeout: float,
+            backoff_seconds: float = 0.0,
+        ) -> Optional[Dict[str, Any]]:
+            if not diagnostics_enabled:
+                return None
+            dur = t_end - t_start
+            rem_op = max(0.0, local_deadline - t_end)
+            rem_par = max(0.0, deadline_monotonic - t_end) if deadline_monotonic is not None else None
+            record: Dict[str, Any] = {
+                "attempt_index": attempts,
+                "start_monotonic": t_start,
+                "end_monotonic": t_end,
+                "duration_seconds": dur,
+                "status": status,
+                "error_category": error_category,
+                "backoff_seconds": backoff_seconds,
+                "remaining_operation_seconds": rem_op,
+                "remaining_parent_seconds": rem_par,
+                "effective_http_timeout_seconds": effective_timeout,
+            }
+            attempt_records.append(record)
+            return record
+
+        def _update_diagnostic(
+            status: str,
+            final_call_duration: float,
+            final_parse_duration: float = 0.0,
+            final_timeout_source: Optional[str] = None,
+            final_validation_category: Optional[str] = None,
+            final_validation_field_paths: Optional[List[str]] = None,
+            final_validation_error_types: Optional[List[str]] = None,
+            final_validation_constraints: Optional[List[Dict[str, Any]]] = None,
+        ) -> None:
+            if not diagnostics_enabled:
+                return
+            t_total = time.monotonic() - start_time
+            diag_dict: Dict[str, Any] = {
+                "schema_build_seconds": t_schema,
+                "schema_chars": schema_chars,
+                "system_prompt_chars": sys_prompt_chars,
+                "user_prompt_chars": user_prompt_chars,
+                "call_duration_seconds": final_call_duration,
+                "parse_duration_seconds": final_parse_duration,
+                "total_duration_seconds": t_total,
+                "model": model_name,
+                "location": self.location,
+                "attempt": attempts,
+                "status": status,
+                "final_timeout_source": final_timeout_source,
+                "final_validation_category": final_validation_category,
+                "final_validation_field_paths": final_validation_field_paths,
+                "final_validation_error_types": final_validation_error_types,
+                "final_validation_constraints": final_validation_constraints,
+                "attempts": list(attempt_records),
+            }
+            self.last_diagnostic = diag_dict
+            logger.info(
+                "AURA LLM Diagnostic [%s]: attempt=%d, schema_build=%.4fs, schema_len=%d, sys_len=%d, user_len=%d, "
+                "call_duration=%.3fs, parse_duration=%.4fs, total_duration=%.3fs, model=%s, location=%s, timeout_source=%s",
+                status,
+                attempts,
+                t_schema,
+                schema_chars,
+                sys_prompt_chars,
+                user_prompt_chars,
+                final_call_duration,
+                final_parse_duration,
+                t_total,
+                model_name,
+                self.location,
+                str(final_timeout_source),
+            )
+
+        def _do_backoff(attempt_idx: int, retry_after: Optional[float] = None) -> float:
             calc_delay = self.initial_backoff_seconds * (self.backoff_multiplier ** (attempt_idx - 1))
             if retry_after is not None and retry_after > 0:
                 calc_delay = max(calc_delay, retry_after)
             capped_delay = min(calc_delay, self.max_backoff_seconds)
 
-            rem_time = deadline - time.monotonic()
+            now = time.monotonic()
+            rem_time = deadline - now
             if rem_time <= 0:
+                timeout_source = _determine_timeout_source(now)
+                _update_diagnostic(
+                    status="timeout",
+                    final_call_duration=0.0,
+                    final_timeout_source=timeout_source,
+                )
                 raise LLMTimeoutError(
                     f"Gemini API request timed out after {operation_timeout:.1f}s.",
-                    details={"model": model_name, "timeout": operation_timeout},
+                    details={
+                        "model": model_name,
+                        "timeout": operation_timeout,
+                        "timeout_source": timeout_source,
+                        "attempt": attempt_idx,
+                    },
                 )
             actual_sleep = min(capped_delay, rem_time)
             self._sleep_fn(actual_sleep)
+            return actual_sleep
 
         while attempts < max_attempts:
             attempts += 1
 
             # Check remaining deadline before each attempt
-            remaining = deadline - time.monotonic()
+            now_before = time.monotonic()
+            remaining = deadline - now_before
             if remaining <= 0:
+                timeout_source = _determine_timeout_source(now_before)
+                _update_diagnostic(
+                    status="timeout",
+                    final_call_duration=0.0,
+                    final_timeout_source=timeout_source,
+                )
                 raise LLMTimeoutError(
                     f"Gemini API request timed out after {operation_timeout:.1f}s.",
-                    details={"model": model_name, "timeout": operation_timeout},
+                    details={
+                        "model": model_name,
+                        "timeout": operation_timeout,
+                        "timeout_source": timeout_source,
+                        "attempt": attempts,
+                    },
                 )
 
             # Effective per-request timeout cannot exceed remaining operation budget
-            per_request_timeout = cfg.timeout_seconds if cfg.timeout_seconds else 45.0
+            per_request_timeout = cfg.timeout_seconds if cfg.timeout_seconds else 30.0
             effective_http_timeout = min(per_request_timeout, remaining)
             create_kwargs["timeout"] = effective_http_timeout
 
             t0_call = time.monotonic() if diagnostics_enabled else 0.0
             try:
                 interaction = genai_client.interactions.create(**create_kwargs)
-                t_call = (time.monotonic() - t0_call) if diagnostics_enabled else 0.0
+                t1_call = time.monotonic() if diagnostics_enabled else 0.0
+                t_call = (t1_call - t0_call) if diagnostics_enabled else 0.0
             except timeout_error_classes as e:
-                t_call = (time.monotonic() - t0_call) if diagnostics_enabled else 0.0
-                if diagnostics_enabled:
-                    t_total = time.monotonic() - start_time
-                    self.last_diagnostic = {
-                        "schema_build_seconds": t_schema,
-                        "schema_chars": schema_chars,
-                        "system_prompt_chars": sys_prompt_chars,
-                        "user_prompt_chars": user_prompt_chars,
-                        "call_duration_seconds": t_call,
-                        "parse_duration_seconds": 0.0,
-                        "total_duration_seconds": t_total,
-                        "model": model_name,
-                        "location": self.location,
-                        "attempt": attempts,
-                        "status": "timeout",
-                    }
-                    logger.info(
-                        "AURA LLM Diagnostic [timeout]: attempt=%d, schema_build=%.4fs, schema_len=%d, sys_len=%d, user_len=%d, "
-                        "call_duration=%.3fs, total_duration=%.3fs, model=%s, location=%s",
-                        attempts, t_schema, schema_chars, sys_prompt_chars, user_prompt_chars,
-                        t_call, t_total, model_name, self.location,
-                    )
-                if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
+                t1_call = time.monotonic() if diagnostics_enabled else 0.0
+                t_call = (t1_call - t0_call) if diagnostics_enabled else 0.0
+                now = t1_call if diagnostics_enabled else time.monotonic()
+                is_exhausted = (attempts >= max_attempts) or ((deadline - now) <= 0)
+                timeout_source = _determine_timeout_source(now) if is_exhausted else None
+
+                att_rec = _record_attempt(
+                    status="timeout",
+                    error_category="timeout",
+                    t_start=t0_call,
+                    t_end=t1_call,
+                    effective_timeout=effective_http_timeout,
+                )
+                _update_diagnostic(
+                    status="timeout",
+                    final_call_duration=t_call,
+                    final_timeout_source=timeout_source,
+                )
+                if is_exhausted:
                     raise LLMTimeoutError(
                         f"Gemini API request timed out after {operation_timeout:.1f}s.",
-                        details={"model": model_name, "timeout": operation_timeout},
+                        details={
+                            "model": model_name,
+                            "timeout": operation_timeout,
+                            "timeout_source": timeout_source,
+                            "attempt": attempts,
+                        },
                     ) from e
-                _do_backoff(attempt_idx=attempts, retry_after=None)
+                sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
+                if att_rec is not None:
+                    att_rec["backoff_seconds"] = sleep_dur
                 continue
             except Exception as e:
+                t1_call = time.monotonic() if diagnostics_enabled else 0.0
+                t_call = (t1_call - t0_call) if diagnostics_enabled else 0.0
                 status_code = getattr(e, "status_code", None) or getattr(e, "code", None)
 
                 is_auth_error = (
@@ -376,6 +553,17 @@ class GeminiLLMClient(LLMClient):
 
                 # Non-retryable: Authentication failure
                 if is_auth_error:
+                    _record_attempt(
+                        status="auth_error",
+                        error_category="auth_error",
+                        t_start=t0_call,
+                        t_end=t1_call,
+                        effective_timeout=effective_http_timeout,
+                    )
+                    _update_diagnostic(
+                        status="auth_error",
+                        final_call_duration=t_call,
+                    )
                     raise LLMAuthenticationError(
                         f"Gemini authentication failed ({status_code}).",
                         details={"status_code": status_code, "model": model_name},
@@ -383,44 +571,176 @@ class GeminiLLMClient(LLMClient):
 
                 # Non-retryable: Deterministic client error
                 if is_client_error:
+                    gemini_status = None
+                    gemini_message = None
+
+                    err_body = getattr(e, "body", None)
+                    if isinstance(err_body, dict):
+                        err_obj = err_body.get("error", {})
+                        if isinstance(err_obj, dict):
+                            gemini_status = err_obj.get("status")
+                            gemini_message = err_obj.get("message")
+                        elif isinstance(err_obj, str):
+                            gemini_message = err_obj
+                    elif isinstance(err_body, str):
+                        try:
+                            parsed_body = json.loads(err_body)
+                            if isinstance(parsed_body, dict):
+                                err_obj = parsed_body.get("error", {})
+                                if isinstance(err_obj, dict):
+                                    gemini_status = err_obj.get("status")
+                                    gemini_message = err_obj.get("message")
+                        except Exception:
+                            gemini_message = err_body
+
+                    resp = getattr(e, "response", None)
+                    if resp is not None and not gemini_message:
+                        try:
+                            resp_json = resp.json()
+                            if isinstance(resp_json, dict):
+                                err_obj = resp_json.get("error", {})
+                                if isinstance(err_obj, dict):
+                                    gemini_status = gemini_status or err_obj.get("status")
+                                    gemini_message = err_obj.get("message")
+                        except Exception:
+                            pass
+
+                    if not gemini_status:
+                        gemini_status = getattr(e, "status", None)
+                    if not gemini_message:
+                        gemini_message = getattr(e, "message", None) or str(e)
+
+                    sanitized_status = _sanitize_diagnostic_text(gemini_status) or "INVALID_ARGUMENT"
+                    sanitized_message = _sanitize_diagnostic_text(gemini_message)
+
+                    err_details: Dict[str, Any] = {
+                        "status_code": status_code or 400,
+                        "gemini_status": sanitized_status,
+                        "gemini_message": sanitized_message,
+                        "model": model_name,
+                        "stage": stage,
+                        "is_structured": True,
+                        "schema_name": getattr(response_schema, "__name__", "unknown"),
+                        "payload_size_chars": total_payload_chars,
+                        "generation_config": {
+                            "temperature": cfg.temperature,
+                            "top_p": cfg.top_p,
+                            "max_output_tokens": cfg.max_output_tokens,
+                        },
+                    }
+
+                    _record_attempt(
+                        status="client_error",
+                        error_category="client_error",
+                        t_start=t0_call,
+                        t_end=t1_call,
+                        effective_timeout=effective_http_timeout,
+                    )
+                    _update_diagnostic(
+                        status="client_error",
+                        final_call_duration=t_call,
+                    )
+
+                    if diagnostics_enabled:
+                        logger.warning(
+                            "Gemini client error (HTTP %s): status=%s, model=%s, stage=%s, structured=True, payload_chars=%d, message=%s",
+                            status_code or 400,
+                            sanitized_status,
+                            model_name,
+                            stage,
+                            total_payload_chars,
+                            sanitized_message,
+                        )
+
+                    error_suffix = f": {sanitized_message}" if sanitized_message else "."
                     raise LLMError(
-                        f"Gemini API client error ({status_code}).",
-                        details={"status_code": status_code, "model": model_name},
+                        f"Gemini API client error ({status_code or 400}){error_suffix}",
+                        details=err_details,
                     ) from e
 
                 # Retryable: Rate limit
                 if is_rate_limit:
+                    att_rec = _record_attempt(
+                        status="rate_limit",
+                        error_category="rate_limit",
+                        t_start=t0_call,
+                        t_end=t1_call,
+                        effective_timeout=effective_http_timeout,
+                    )
+                    _update_diagnostic(
+                        status="rate_limit",
+                        final_call_duration=t_call,
+                    )
                     if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
                         raise LLMRateLimitError(
                             f"Gemini rate limit or quota exceeded ({status_code}).",
                             details={"status_code": status_code, "model": model_name},
                         ) from e
                     retry_after = self._extract_retry_after(e)
-                    _do_backoff(attempt_idx=attempts, retry_after=retry_after)
+                    sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=retry_after)
+                    if att_rec is not None:
+                        att_rec["backoff_seconds"] = sleep_dur
                     continue
 
                 # Retryable: Provider transient 5xx error
                 if is_provider_error:
+                    att_rec = _record_attempt(
+                        status="server_error",
+                        error_category="server_error",
+                        t_start=t0_call,
+                        t_end=t1_call,
+                        effective_timeout=effective_http_timeout,
+                    )
+                    _update_diagnostic(
+                        status="server_error",
+                        final_call_duration=t_call,
+                    )
                     if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
                         raise LLMProviderError(
                             f"Gemini upstream server error ({status_code}).",
                             details={"status_code": status_code, "model": model_name},
                         ) from e
                     retry_after = self._extract_retry_after(e)
-                    _do_backoff(attempt_idx=attempts, retry_after=retry_after)
+                    sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=retry_after)
+                    if att_rec is not None:
+                        att_rec["backoff_seconds"] = sleep_dur
                     continue
 
                 # Retryable: Network transport failure
                 if is_transport_error:
+                    att_rec = _record_attempt(
+                        status="transport_error",
+                        error_category="transport_error",
+                        t_start=t0_call,
+                        t_end=t1_call,
+                        effective_timeout=effective_http_timeout,
+                    )
+                    _update_diagnostic(
+                        status="transport_error",
+                        final_call_duration=t_call,
+                    )
                     if attempts >= max_attempts or (deadline - time.monotonic()) <= 0:
                         raise LLMError(
                             "Network transport error calling Gemini API.",
                             details={"model": model_name},
                         ) from e
-                    _do_backoff(attempt_idx=attempts, retry_after=None)
+                    sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
+                    if att_rec is not None:
+                        att_rec["backoff_seconds"] = sleep_dur
                     continue
 
                 # Non-retryable: Unexpected other exception
+                _record_attempt(
+                    status="unexpected_error",
+                    error_category="unexpected_error",
+                    t_start=t0_call,
+                    t_end=t1_call,
+                    effective_timeout=effective_http_timeout,
+                )
+                _update_diagnostic(
+                    status="unexpected_error",
+                    final_call_duration=t_call,
+                )
                 raise LLMError(
                     "Unexpected error communicating with Gemini API.",
                     details={"model": model_name},
@@ -447,9 +767,22 @@ class GeminiLLMClient(LLMClient):
                             raw_text = parts[0]["text"]
 
             if not raw_text or not str(raw_text).strip():
+                att_rec = _record_attempt(
+                    status="empty_response",
+                    error_category="empty_response",
+                    t_start=t0_call,
+                    t_end=t1_call,
+                    effective_timeout=effective_http_timeout,
+                )
                 if attempts < max_attempts and (deadline - time.monotonic()) > 0:
-                    _do_backoff(attempt_idx=attempts, retry_after=None)
+                    sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
+                    if att_rec is not None:
+                        att_rec["backoff_seconds"] = sleep_dur
                     continue
+                _update_diagnostic(
+                    status="empty_response",
+                    final_call_duration=t_call,
+                )
                 raise LLMResponseValidationError(
                     "Gemini candidate returned empty text parts.",
                     details={"model": model_name},
@@ -463,33 +796,97 @@ class GeminiLLMClient(LLMClient):
                     response_schema=response_schema,
                     raw_user_prompt=prompt,
                 )
-                t_parse = (time.monotonic() - t0_parse) if diagnostics_enabled else 0.0
-                if diagnostics_enabled:
-                    t_total = time.monotonic() - start_time
-                    self.last_diagnostic = {
-                        "schema_build_seconds": t_schema,
-                        "schema_chars": schema_chars,
-                        "system_prompt_chars": sys_prompt_chars,
-                        "user_prompt_chars": user_prompt_chars,
-                        "call_duration_seconds": t_call,
-                        "parse_duration_seconds": t_parse,
-                        "total_duration_seconds": t_total,
-                        "model": model_name,
-                        "location": self.location,
-                        "attempt": attempts,
-                        "status": "success",
-                    }
-                    logger.info(
-                        "AURA LLM Diagnostic [success]: schema_build=%.4fs, schema_len=%d, sys_len=%d, user_len=%d, "
-                        "call_duration=%.3fs, parse_duration=%.4fs, total_duration=%.3fs, model=%s, location=%s, attempt=%d",
-                        t_schema, schema_chars, sys_prompt_chars, user_prompt_chars,
-                        t_call, t_parse, t_total, model_name, self.location, attempts,
-                    )
+                t1_parse = time.monotonic() if diagnostics_enabled else 0.0
+                t_parse = (t1_parse - t0_parse) if diagnostics_enabled else 0.0
+
+                _record_attempt(
+                    status="success",
+                    error_category=None,
+                    t_start=t0_call,
+                    t_end=t1_parse,
+                    effective_timeout=effective_http_timeout,
+                )
+                _update_diagnostic(
+                    status="success",
+                    final_call_duration=t_call,
+                    final_parse_duration=t_parse,
+                )
                 return validated_result
-            except LLMResponseValidationError:
+            except LLMResponseValidationError as val_err:
+                t1_parse = time.monotonic() if diagnostics_enabled else 0.0
+                val_cat = getattr(val_err, "category", None) or "validation_error"
+                val_details = getattr(val_err, "details", {})
+                att_rec = _record_attempt(
+                    status="validation_error",
+                    error_category=val_cat,
+                    t_start=t0_call,
+                    t_end=t1_parse,
+                    effective_timeout=effective_http_timeout,
+                )
+                field_paths_list = val_details.get("field_paths", []) if isinstance(val_details, dict) else []
+                error_types_list = val_details.get("error_types", []) if isinstance(val_details, dict) else []
+                constraints_list = val_details.get("constraints", []) if isinstance(val_details, dict) else []
+                if att_rec is not None and isinstance(val_details, dict):
+                    att_rec["validation_category"] = val_cat
+                    att_rec["validation_field_paths"] = field_paths_list
+                    att_rec["validation_schema"] = val_details.get("schema", response_schema.__name__)
+                    att_rec["validation_categories"] = val_details.get("categories", [val_cat])
+                    att_rec["validation_error_types"] = error_types_list
+                    att_rec["validation_constraints"] = constraints_list
+                schema_str = val_details.get("schema", getattr(response_schema, "__name__", "unknown")) if isinstance(val_details, dict) else getattr(response_schema, "__name__", "unknown")
+                logger.warning(
+                    "Gemini structured response validation failed (attempt %d/%d): schema=%s, category=%s, error_types=%s, field_paths=%s, constraints=%s",
+                    attempts,
+                    max_attempts,
+                    schema_str,
+                    val_cat,
+                    error_types_list,
+                    field_paths_list,
+                    constraints_list,
+                )
+
                 if attempts < max_attempts and (deadline - time.monotonic()) > 0:
-                    _do_backoff(attempt_idx=attempts, retry_after=None)
+                    # Use only known schema metadata, never rejected model output.
+                    # Keep feedback narrowly scoped to the observed entity-ID error.
+                    has_oversized_entity_id = any(
+                        isinstance(item, dict)
+                        and item.get("field") == "findings.0.target_entity_id"
+                        and item.get("type") == "string_too_long"
+                        and item.get("max_length") == 100
+                        for item in constraints_list
+                    )
+                    if has_oversized_entity_id:
+                        create_kwargs["input"] = (
+                            prompt
+                            + "\n\nCORRECTION FOR RETRY: The previous structured response "
+                            "failed schema validation because findings.0.target_entity_id "
+                            "exceeded 100 characters. For each finding, use only the exact "
+                            "canonical target entity ID supplied in the original prompt, "
+                            "or JSON null if no unambiguous ID applies. Never include "
+                            "descriptions, composite IDs, invented IDs, or truncated IDs."
+                        )
+                    sleep_dur = _do_backoff(attempt_idx=attempts, retry_after=None)
+                    if att_rec is not None:
+                        att_rec["backoff_seconds"] = sleep_dur
                     continue
+                _update_diagnostic(
+                    status="validation_error",
+                    final_call_duration=t_call,
+                    final_parse_duration=(t1_parse - t0_parse) if diagnostics_enabled else 0.0,
+                    final_validation_category=val_cat,
+                    final_validation_field_paths=field_paths_list,
+                    final_validation_error_types=error_types_list,
+                    final_validation_constraints=constraints_list,
+                )
+                logger.error(
+                    "Gemini structured response validation exhausted all %d attempts: schema=%s, category=%s, error_types=%s, field_paths=%s, constraints=%s",
+                    max_attempts,
+                    schema_str,
+                    val_cat,
+                    error_types_list,
+                    field_paths_list,
+                    constraints_list,
+                )
                 raise
 
         raise LLMResponseValidationError("Gemini structured output generation failed all retry attempts.")

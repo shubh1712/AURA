@@ -11,4 +11,12 @@ export * from "./decision/evidence/EvidenceGapsSection";
 export * from "./decision/evidence/SourceList";
 export * from "./ui/Button";
 export * from "./ui/Card";
+export * from "./decision/StageAwareProgress";
+export * from "./decision/boardroom/ReasoningBoardSection";
+export * from "./decision/boardroom/PerspectiveCard";
+export * from "./decision/boardroom/DisagreementsSection";
+export * from "./decision/boardroom/BoardSynthesisSection";
+export * from "./decision/recommendation";
+export * from "./decision/simulation";
+export * from "./decision/action";
 

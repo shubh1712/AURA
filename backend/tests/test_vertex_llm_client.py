@@ -230,13 +230,13 @@ def test_operation_deadline_enforced_strictly(monkeypatch: pytest.MonkeyPatch) -
     assert "Gemini API request timed out" in str(exc_info.value)
 
 
-def test_remaining_budget_below_45s_clamps_http_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Proves that a remaining operation budget below 45s clamps the per-request HTTP timeout.
+def test_remaining_budget_below_30s_clamps_http_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proves that a remaining operation budget below 30s clamps the per-request HTTP timeout.
 
-    When remaining budget is below configured 45s (e.g. 28s remaining):
-    timeout = min(45.0, 28.0) -> 28.0s.
-    When remaining budget is above 45s (e.g. 58s remaining):
-    timeout = min(45.0, 58.0) -> 45.0s.
+    When remaining budget is below configured 30s (e.g. 28s remaining):
+    timeout = min(30.0, 28.0) -> 28.0s.
+    When remaining budget is above 30s (e.g. 58s remaining):
+    timeout = min(30.0, 58.0) -> 30.0s.
     """
     mock_transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"output_text": '{"summary":"ok","confidence":1.0}'}))
     http_client = httpx.Client(transport=mock_transport)
@@ -257,7 +257,7 @@ def test_remaining_budget_below_45s_clamps_http_timeout(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(orig_genai.interactions, "create", mock_create)
 
-    # Case 1: Remaining budget is 28.0s (below 45s) -> clamped to 28.0s
+    # Case 1: Remaining budget is 28.0s (below 30s) -> clamped to 28.0s
     # start_time = 100.0, deadline = 160.0 (operation_timeout_seconds=60.0)
     # when remaining is evaluated, current time = 132.0 -> remaining = 160.0 - 132.0 = 28.0s
     times_case1 = [100.0, 132.0, 133.0]
@@ -270,7 +270,7 @@ def test_remaining_budget_below_45s_clamps_http_timeout(monkeypatch: pytest.Monk
     assert len(observed_timeouts) == 1
     assert observed_timeouts[0] == pytest.approx(28.0, abs=0.01)
 
-    # Case 2: Remaining budget is 58.0s (above 45s) -> capped at configured 45.0s
+    # Case 2: Remaining budget is 58.0s (above 30s) -> capped at configured 30.0s
     # start_time = 200.0, deadline = 260.0
     # when remaining is evaluated, current time = 202.0 -> remaining = 260.0 - 202.0 = 58.0s
     times_case2 = [200.0, 202.0, 203.0]
@@ -281,13 +281,13 @@ def test_remaining_budget_below_45s_clamps_http_timeout(monkeypatch: pytest.Monk
         response_schema=SampleStructuredOutput,
     )
     assert len(observed_timeouts) == 2
-    assert observed_timeouts[1] == pytest.approx(45.0, abs=0.01)
+    assert observed_timeouts[1] == pytest.approx(30.0, abs=0.01)
 
 
 def test_60s_operation_deadline_is_unchanged() -> None:
     """Proves that operation_timeout_seconds remains strictly 60.0s in DEFAULT_LLM_CONFIG."""
     from app.services.llm.client import DEFAULT_LLM_CONFIG
-    assert DEFAULT_LLM_CONFIG.timeout_seconds == 45.0
+    assert DEFAULT_LLM_CONFIG.timeout_seconds == 30.0
     assert DEFAULT_LLM_CONFIG.operation_timeout_seconds == 60.0
 
 

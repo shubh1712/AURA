@@ -7,6 +7,8 @@ click==8.5.0
 colorama==0.4.6
 fastapi==0.142.2
 google-genai>=2.0.0
+google-cloud-firestore>=2.15.0
+google-cloud-tasks>=2.16.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1

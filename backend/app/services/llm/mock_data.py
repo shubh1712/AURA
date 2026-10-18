@@ -4,6 +4,8 @@ Provides a canonical, fully-typed DecisionModel instance for use in unit tests
 and offline development without active external LLM connections.
 """
 
+from typing import Any
+
 from app.schemas.decision_model import (
     Assumption,
     Complexity,
@@ -134,5 +136,169 @@ def get_default_decision_model(question: str = "Should our startup reduce pricin
         key_questions=[
             "What is the estimated CAC payback period under the discounted rate?",
             "Will existing cohort customers request retroactive price adjustments?",
+        ],
+    )
+
+
+def get_default_candidate_recommendation():
+    """Generates a valid canonical CandidateDecisionRecommendation for mock/fake LLM runs."""
+    from app.schemas.recommendation import (
+        ActionPriority,
+        ActionTimeHorizon,
+        CandidateActionItem,
+        CandidateActionPlan,
+        CandidateAlternativeOption,
+        CandidateDecisionRecommendation,
+        CandidateUncertaintyAssessment,
+        DecisionReadiness,
+        DecisionStatus,
+        EvidenceStrength,
+        RecommendationStability,
+    )
+
+    return CandidateDecisionRecommendation(
+        decision_status=DecisionStatus.PROCEED,
+        recommended_action="Proceed with phased execution and structured milestone validation.",
+        executive_rationale="Analysis indicates favorable conditions for proceeding with phased implementation under monitored risk controls.",
+        supporting_evidence_item_ids=[],
+        relevant_assumption_ids=[],
+        relevant_evidence_gap_ids=[],
+        unresolved_disagreement_ids=[],
+        alternative_options=[
+            CandidateAlternativeOption(
+                name="Status Quo Baseline",
+                description="Maintain current operating baseline without changes.",
+                tradeoffs=["Preserves resources", "Forgoes strategic opportunities"],
+                why_not_recommended="Does not address primary strategic objectives.",
+            )
+        ],
+        uncertainty_assessment=CandidateUncertaintyAssessment(
+            evidence_strength=EvidenceStrength.MODERATE,
+            decision_readiness=DecisionReadiness.READY,
+            recommendation_stability=RecommendationStability.HIGH,
+            critical_missing_information=[],
+            conditions_changing_recommendation=[],
+            assumptions_relied_upon=[],
+            evidence_gaps_relied_upon=[],
+        ),
+        action_plan=CandidateActionPlan(
+            summary="Phased rollout prioritizing pilot validation followed by scaled execution.",
+            actions=[
+                CandidateActionItem(
+                    title="Pilot Execution",
+                    objective="Validate initial operational assumptions",
+                    description="Execute targeted pilot across primary stakeholder segments.",
+                    priority=ActionPriority.HIGH,
+                    responsible_role="Project Lead",
+                    time_horizon=ActionTimeHorizon.IMMEDIATE,
+                    dependencies=[],
+                    success_metrics=["Pilot milestones completed"],
+                    risk_mitigations=["Regular review checkpoints"],
+                    decision_gates=[],
+                    fallback_action="Re-evaluate scope and assumptions",
+                )
+            ],
+            key_milestones=["Pilot review", "Scaled rollout"],
+        ),
+    )
+
+
+def get_default_candidate_scenario_set() -> Any:
+    """Generates a valid canonical CandidateScenarioSet for offline testing without external LLMs."""
+    from app.schemas.scenario import (
+        CandidateFutureScenario,
+        CandidateScenarioKeyEvent,
+        CandidateScenarioMilestone,
+        CandidateScenarioSet,
+        ScenarioType,
+    )
+
+    return CandidateScenarioSet(
+        summary="Comprehensive future scenario simulations evaluating decision pathways across optimistic, base case, and pessimistic conditions.",
+        scenarios=[
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.OPTIMISTIC,
+                probability=0.25,
+                name="Optimistic Trajectory & Rapid Expansion",
+                narrative="Under this optimistic trajectory, strategic objectives are achieved ahead of schedule with high operational leverage and market tailwinds.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Early Validation Milestone",
+                        description="Initial adoption metrics exceed baseline expectations by 30%.",
+                        timeframe="Month 3",
+                        impact_on_decision="Accelerates rollout objectives.",
+                    )
+                ],
+                risks=["Scaling capacity constraints"],
+                opportunities=["Rapid market leadership capture"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Initial Gate Passed",
+                        description="Core pilot milestone successfully completed.",
+                        time_horizon="Month 3",
+                        expected_outcome="Target growth achieved.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.BASE_CASE,
+                probability=0.50,
+                name="Base Case Trajectory & Measured Progress",
+                narrative="Under the base case, the organization executes disciplined milestone-gated implementation with steady operational progress.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Target Milestone Reached",
+                        description="Operational milestones achieved within planned variance.",
+                        timeframe="Month 6",
+                        impact_on_decision="Confirms baseline operational expectations.",
+                    )
+                ],
+                risks=["Execution cadence friction"],
+                opportunities=["Predictable sustainable growth"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Mid-term Review",
+                        description="Evaluation of core performance metrics.",
+                        time_horizon="Month 6",
+                        expected_outcome="Baseline objectives achieved.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
+            CandidateFutureScenario(
+                scenario_type=ScenarioType.PESSIMISTIC,
+                probability=0.25,
+                name="Pessimistic Trajectory & Defensive Positioning",
+                narrative="Under the pessimistic scenario, adverse market shifts or operational delays require defensive risk mitigation and contingency controls.",
+                key_events=[
+                    CandidateScenarioKeyEvent(
+                        title="Downside Trigger Checkpoint",
+                        description="Adverse conditions necessitate activating defensive controls.",
+                        timeframe="Month 4",
+                        impact_on_decision="Triggers contingency mitigation protocols.",
+                    )
+                ],
+                risks=["Extended resource burn", "Macro headwinds"],
+                opportunities=["Operational tightening and resilience building"],
+                timeline=[
+                    CandidateScenarioMilestone(
+                        title="Defensive Reassessment",
+                        description="Contingency protocols activated to preserve capital.",
+                        time_horizon="Month 4",
+                        expected_outcome="Capital preservation and downside capped.",
+                    )
+                ],
+                supporting_evidence_item_ids=[],
+                relevant_assumption_ids=[],
+                relevant_constraint_ids=[],
+                relevant_gap_ids=[],
+            ),
         ],
     )
