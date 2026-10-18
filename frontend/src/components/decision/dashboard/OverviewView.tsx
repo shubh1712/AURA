@@ -106,11 +106,11 @@ export function OverviewView({
         </div>
 
         {/* Decision Title */}
-        <div>
+        <div className="min-w-0">
           <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold block mb-1">
             Decision Focal Question
           </span>
-          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight leading-snug">
+          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight leading-snug break-words [overflow-wrap:anywhere] min-w-0">
             {decisionTitle}
           </h2>
         </div>
@@ -119,31 +119,39 @@ export function OverviewView({
         {kpis.length > 0 && <ExecutiveKpiGrid kpis={kpis} />}
 
         {/* 1–2 Sentence Recommendation Card with Progressive Disclosure */}
-        <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/25 p-5 space-y-2.5">
+        <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/25 p-5 space-y-2.5 min-w-0 overflow-hidden">
           <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-bold block">
             AURA Recommendation
           </span>
-          <p className="text-base sm:text-lg font-semibold text-emerald-100 leading-snug">
+          <p className="text-base sm:text-lg font-semibold text-emerald-100 leading-snug break-words [overflow-wrap:anywhere] min-w-0">
             {conciseRecommendation}
           </p>
 
           {executiveRationale && (
-            <div className="pt-1">
+            <div className="pt-1 min-w-0">
               <button
                 type="button"
                 onClick={() => setShowFullRationale(!showFullRationale)}
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-mono inline-flex items-center gap-1.5 cursor-pointer select-none transition-colors"
+                className="text-xs text-emerald-400 hover:text-emerald-300 font-mono inline-flex items-center gap-1.5 cursor-pointer select-none transition-colors duration-150 motion-reduce:transition-none"
                 aria-expanded={showFullRationale}
               >
                 <span>{showFullRationale ? "Hide Detailed Rationale" : "Read Full Executive Rationale"}</span>
                 <span className="text-[10px]">{showFullRationale ? "▲" : "▼"}</span>
               </button>
 
-              {showFullRationale && (
-                <p className="text-xs sm:text-sm text-zinc-300 font-sans leading-relaxed pt-2.5 border-t border-emerald-900/40 mt-2">
-                  {executiveRationale}
-                </p>
-              )}
+              <div
+                className={`grid transition-all duration-200 ease-in-out motion-reduce:transition-none ${
+                  showFullRationale
+                    ? "grid-rows-[1fr] opacity-100 mt-2 pt-2.5 border-t border-emerald-900/40"
+                    : "grid-rows-[0fr] opacity-0"
+                }`}
+              >
+                <div className="overflow-hidden min-w-0">
+                  <p className="text-xs sm:text-sm text-zinc-300 font-sans leading-relaxed break-words [overflow-wrap:anywhere]">
+                    {executiveRationale}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -154,7 +162,7 @@ export function OverviewView({
             <button
               type="button"
               onClick={onExploreClick}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-all duration-200 motion-reduce:transition-none cursor-pointer"
             >
               <span>Explore Scenarios &amp; What-If</span>
               <span>&rarr;</span>
@@ -164,7 +172,7 @@ export function OverviewView({
             <button
               type="button"
               onClick={onActionClick}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-all duration-200 motion-reduce:transition-none cursor-pointer"
             >
               <span>View Action Plan</span>
               <span>&rarr;</span>
@@ -174,7 +182,7 @@ export function OverviewView({
             <button
               type="button"
               onClick={onDetailsClick}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer underline ml-auto"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors duration-150 motion-reduce:transition-none cursor-pointer underline ml-auto"
             >
               <span>Full 6-Stage Details</span>
             </button>

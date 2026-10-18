@@ -7,7 +7,8 @@ interface DecisionModelSummaryProps {
   model: DecisionModel;
 }
 
-function formatSnakeCase(str: string): string {
+function formatSnakeCase(str?: string | null): string {
+  if (!str) return "";
   return str
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -17,7 +18,16 @@ function formatSnakeCase(str: string): string {
 export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
 
-  const { decision, complexity, objectives, variables, tradeoffs, assumptions, unknowns, constraints } = model;
+  const {
+    decision = {} as any,
+    complexity = {} as any,
+    objectives = [],
+    variables = [],
+    tradeoffs = [],
+    assumptions = [],
+    unknowns = [],
+    constraints = [],
+  } = model || {};
 
   const validObjectives = objectives.filter(
     (obj) => obj.description && obj.description.trim().length > 0
@@ -78,7 +88,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
           <button
             type="button"
             onClick={() => setIsExpanded(!isExpanded)}
-            className="rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer border border-zinc-800"
+            className="rounded px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors duration-200 motion-reduce:transition-none cursor-pointer border border-zinc-800"
           >
             {isExpanded ? "Collapse" : "Expand"}
           </button>
@@ -86,18 +96,18 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
       </div>
 
       {/* Decision Summary & Visual Complexity/Reversibility Panel */}
-      <div className="space-y-3">
-        <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-sans font-medium">
+      <div className="space-y-3 min-w-0">
+        <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-sans font-medium break-words [overflow-wrap:anywhere] min-w-0">
           {decision.summary}
         </p>
 
         {/* Visual Complexity Gauge & Reversibility Indicators */}
-        <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-3.5 space-y-3 text-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-3.5 space-y-3 text-xs min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 min-w-0">
             {/* Reversibility Indicator */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
               <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border shrink-0 ${
                   complexity.reversibility?.toLowerCase().includes("two_way") ||
                   complexity.reversibility?.toLowerCase().includes("reversible")
                     ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/60"
@@ -112,7 +122,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
                 </span>
                 <span>{formatSnakeCase(complexity.reversibility)} Commitment</span>
               </span>
-              <span className="text-zinc-400 font-sans text-xs">
+              <span className="text-zinc-400 font-sans text-xs break-words [overflow-wrap:anywhere] min-w-0">
                 {complexity.reasoning}
               </span>
             </div>
@@ -154,8 +164,13 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
         </div>
       </div>
 
-      {isExpanded && (
-        <div className="space-y-6 pt-2">
+      <div
+        className={`grid transition-all duration-200 ease-in-out motion-reduce:transition-none ${
+          isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 print:grid-rows-[1fr] print:opacity-100"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-6 pt-2 min-w-0">
           {/* Primary Objectives & Constraints Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Objectives */}
@@ -167,9 +182,9 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validObjectives.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No objectives defined.</p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-2 min-w-0">
                   {validObjectives.map((obj) => (
-                    <li key={obj.id} className="text-xs text-zinc-300 flex items-start gap-2">
+                    <li key={obj.id} className="text-xs text-zinc-300 flex items-start gap-2 min-w-0">
                       <span
                         className={`inline-block mt-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono shrink-0 ${
                           obj.is_primary
@@ -179,7 +194,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
                       >
                         {obj.is_primary ? "PRIMARY" : "SECONDARY"}
                       </span>
-                      <span className="leading-relaxed">
+                      <span className="leading-relaxed break-words [overflow-wrap:anywhere] min-w-0">
                         {obj.description}
                         {obj.target_metric && (
                           <span className="text-zinc-400 ml-1">
@@ -194,7 +209,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
             </div>
 
             {/* Constraints */}
-            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3">
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3 min-w-0">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
                 <span>Active Constraints</span>
                 <span className="font-mono text-[11px] text-zinc-500">{validConstraints.length}</span>
@@ -202,9 +217,9 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validConstraints.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No explicit boundary constraints configured.</p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-2 min-w-0">
                   {validConstraints.map((c) => (
-                    <li key={c.id} className="text-xs text-zinc-300 flex items-start gap-2">
+                    <li key={c.id} className="text-xs text-zinc-300 flex items-start gap-2 min-w-0">
                       <span
                         className={`inline-block mt-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono shrink-0 ${
                           c.is_hard_constraint
@@ -214,7 +229,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
                       >
                         {c.is_hard_constraint ? "HARD" : "SOFT"}
                       </span>
-                      <span className="leading-relaxed">
+                      <span className="leading-relaxed break-words [overflow-wrap:anywhere] min-w-0">
                         {c.description || c.name}
                         {c.threshold_expression && (
                           <span className="text-zinc-400 ml-1">[{c.threshold_expression}]</span>
@@ -230,7 +245,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
           {/* Trade-offs & Variables */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Trade-offs */}
-            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3">
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3 min-w-0">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
                 <span>Inherent Trade-Offs</span>
                 <span className="font-mono text-[11px] text-zinc-500">{validTradeoffs.length}</span>
@@ -238,23 +253,23 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validTradeoffs.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No explicit trade-offs documented.</p>
               ) : (
-                <ul className="space-y-3">
+                <ul className="space-y-3 min-w-0">
                   {validTradeoffs.map((t) => (
-                    <li key={t.id} className="text-xs space-y-1.5 rounded border border-zinc-800/50 bg-zinc-900/30 p-2.5">
+                    <li key={t.id} className="text-xs space-y-1.5 rounded border border-zinc-800/50 bg-zinc-900/30 p-2.5 min-w-0">
                       {t.upside && (
-                        <div className="flex items-start gap-1.5">
+                        <div className="flex items-start gap-1.5 min-w-0">
                           <span className="rounded bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.2 text-[10px] font-mono font-medium text-emerald-300 uppercase shrink-0">
                             Upside
                           </span>
-                          <span className="text-zinc-200 leading-snug">{t.upside}</span>
+                          <span className="text-zinc-200 leading-snug break-words [overflow-wrap:anywhere] min-w-0">{t.upside}</span>
                         </div>
                       )}
                       {t.downside && (
-                        <div className="flex items-start gap-1.5">
+                        <div className="flex items-start gap-1.5 min-w-0">
                           <span className="rounded bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.2 text-[10px] font-mono font-medium text-rose-300 uppercase shrink-0">
                             Downside
                           </span>
-                          <span className="text-zinc-300 leading-snug">{t.downside}</span>
+                          <span className="text-zinc-300 leading-snug break-words [overflow-wrap:anywhere] min-w-0">{t.downside}</span>
                         </div>
                       )}
                     </li>
@@ -264,7 +279,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
             </div>
 
             {/* Decision Variables */}
-            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3">
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-3 min-w-0">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center justify-between">
                 <span>Key Variables</span>
                 <span className="font-mono text-[11px] text-zinc-500">{validVariables.length}</span>
@@ -272,16 +287,16 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validVariables.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No key variables defined.</p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-2 min-w-0">
                   {validVariables.slice(0, 5).map((v) => (
-                    <li key={v.id} className="text-xs flex items-center justify-between text-zinc-300 py-1 border-b border-zinc-800/40 last:border-none">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-zinc-200">{v.name || v.id}</span>
-                        <span className="text-[10px] text-zinc-500 font-mono">
+                    <li key={v.id} className="text-xs flex items-center justify-between text-zinc-300 py-1 border-b border-zinc-800/40 last:border-none min-w-0 gap-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="font-medium text-zinc-200 break-words [overflow-wrap:anywhere] min-w-0">{v.name || v.id}</span>
+                        <span className="text-[10px] text-zinc-500 font-mono shrink-0">
                           ({v.is_controllable ? "Controllable" : "Exogenous"})
                         </span>
                       </div>
-                      <span className="text-[11px] font-mono text-zinc-400">
+                      <span className="text-[11px] font-mono text-zinc-400 shrink-0">
                         {v.baseline_value !== null && v.baseline_value !== undefined
                           ? String(v.baseline_value)
                           : formatSnakeCase(v.variable_type)}
@@ -301,7 +316,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
           {/* Assumptions & Unknowns (Compact row) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
             {/* Key Assumptions */}
-            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-2.5">
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-2.5 min-w-0">
               <h4 className="font-semibold uppercase tracking-wider text-zinc-400 text-[11px] flex items-center justify-between">
                 <span>Assumptions</span>
                 <span className="font-mono text-[11px] text-zinc-500">{validAssumptions.length}</span>
@@ -309,11 +324,11 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validAssumptions.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No assumptions specified.</p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="space-y-1.5 min-w-0">
                   {validAssumptions.slice(0, 3).map((a) => (
-                    <li key={a.id} className="text-zinc-300 leading-relaxed flex items-start gap-1.5">
-                      <span className="text-zinc-600 font-mono select-none">&bull;</span>
-                      <span>
+                    <li key={a.id} className="text-zinc-300 leading-relaxed flex items-start gap-1.5 min-w-0">
+                      <span className="text-zinc-600 font-mono select-none shrink-0">&bull;</span>
+                      <span className="break-words [overflow-wrap:anywhere] min-w-0">
                         {a.statement}{" "}
                         <span className="text-zinc-500 text-[10px] font-mono">
                           [{formatSnakeCase(a.confidence)} confidence]
@@ -326,7 +341,7 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
             </div>
 
             {/* Unknowns */}
-            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-2.5">
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-2.5 min-w-0">
               <h4 className="font-semibold uppercase tracking-wider text-zinc-400 text-[11px] flex items-center justify-between">
                 <span>High-Impact Unknowns</span>
                 <span className="font-mono text-[11px] text-zinc-500">{validUnknowns.length}</span>
@@ -334,11 +349,11 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
               {validUnknowns.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic">No high-impact unknowns identified.</p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="space-y-1.5 min-w-0">
                   {validUnknowns.slice(0, 3).map((u) => (
-                    <li key={u.id} className="text-zinc-300 leading-relaxed flex items-start gap-1.5">
-                      <span className="text-zinc-600 font-mono select-none">&bull;</span>
-                      <span>
+                    <li key={u.id} className="text-zinc-300 leading-relaxed flex items-start gap-1.5 min-w-0">
+                      <span className="text-zinc-600 font-mono select-none shrink-0">&bull;</span>
+                      <span className="break-words [overflow-wrap:anywhere] min-w-0">
                         {u.question}{" "}
                         <span className="text-zinc-500 text-[10px] font-mono">
                           [{formatSnakeCase(u.criticality)} criticality]
@@ -351,7 +366,8 @@ export function DecisionModelSummary({ model }: DecisionModelSummaryProps) {
             </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
-  );
+  </div>
+);
 }

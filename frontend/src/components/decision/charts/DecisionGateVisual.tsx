@@ -48,7 +48,7 @@ export function DecisionGateVisual({ gates }: DecisionGateVisualProps) {
           return (
             <div
               key={idx}
-              className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 sm:p-5 space-y-3.5 text-xs min-w-0 overflow-hidden flex flex-col justify-between"
+              className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 sm:p-5 space-y-3.5 text-xs min-w-0 overflow-hidden flex flex-col justify-between transition-all duration-200 hover:border-zinc-700/80 motion-reduce:transition-none"
             >
               <div className="space-y-3 min-w-0">
                 {/* Header: Gate index, naturally wrapping title, and stacked timing badge */}
@@ -57,7 +57,7 @@ export function DecisionGateVisual({ gates }: DecisionGateVisualProps) {
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-indigo-950 text-indigo-300 font-mono font-bold text-xs border border-indigo-800/60 mt-0.5">
                       G{idx + 1}
                     </span>
-                    <h5 className="font-semibold text-white text-xs sm:text-sm leading-snug break-words min-w-0 flex-1">
+                    <h5 className="font-semibold text-white text-xs sm:text-sm leading-snug break-words [overflow-wrap:anywhere] min-w-0 flex-1">
                       {title}
                     </h5>
                   </div>
@@ -82,7 +82,7 @@ export function DecisionGateVisual({ gates }: DecisionGateVisualProps) {
                           key={c.criterion_id}
                           className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-3 rounded bg-zinc-950/70 border border-zinc-800 px-3 py-2 text-[11px] min-w-0"
                         >
-                          <span className="text-zinc-200 leading-snug break-words min-w-0 flex-1">
+                          <span className="text-zinc-200 leading-snug break-words [overflow-wrap:anywhere] min-w-0 flex-1">
                             {c.description}
                           </span>
                           <span className="font-mono text-amber-300 shrink-0 self-start sm:self-auto text-[10px] sm:text-[11px] font-medium bg-zinc-900/80 px-1.5 py-0.5 rounded border border-zinc-800/80">
@@ -93,7 +93,7 @@ export function DecisionGateVisual({ gates }: DecisionGateVisualProps) {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-[11px] text-zinc-400 min-w-0 break-words">
+                  <div className="text-[11px] text-zinc-400 min-w-0 break-words [overflow-wrap:anywhere]">
                     <span className="font-semibold text-zinc-300">Method: </span>
                     {!("criteria" in gate) ? (gate as DecisionGate).verification_method : "Procedural verification"}
                   </div>
@@ -105,7 +105,7 @@ export function DecisionGateVisual({ gates }: DecisionGateVisualProps) {
                 <span className="font-mono text-[10px] uppercase font-bold text-rose-400 block tracking-wide">
                   Rollback / Fallback Trigger:
                 </span>
-                <p className="text-rose-200/90 leading-relaxed break-words font-sans">
+                <p className="text-rose-200/90 leading-relaxed break-words [overflow-wrap:anywhere] font-sans min-w-0">
                   {rollback || "Halt rollout and revert to preceding baseline state."}
                 </p>
               </div>

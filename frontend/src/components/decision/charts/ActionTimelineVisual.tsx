@@ -183,9 +183,9 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
               </div>
 
               {/* Action Card */}
-              <div className="flex-1 rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-3.5 space-y-2 text-xs transition-colors hover:border-zinc-700">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
-                  <h5 className="font-semibold text-white text-xs sm:text-sm">
+              <div className="flex-1 rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-3.5 space-y-2 text-xs transition-colors hover:border-zinc-700 min-w-0 overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 min-w-0">
+                  <h5 className="font-semibold text-white text-xs sm:text-sm break-words [overflow-wrap:anywhere] min-w-0">
                     {act.title}
                   </h5>
 
@@ -205,7 +205,7 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
                     <button
                       type="button"
                       onClick={() => setExpandedId(isExpanded ? null : actId)}
-                      className="text-[10px] text-zinc-400 hover:text-zinc-200 underline font-mono"
+                      className="text-[10px] text-zinc-400 hover:text-zinc-200 underline font-mono cursor-pointer transition-colors duration-150 motion-reduce:transition-none"
                     >
                       {isExpanded ? "Collapse" : "Details"}
                     </button>
@@ -213,19 +213,19 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
                 </div>
 
                 {/* Metadata Row: Role & Timing */}
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
-                  <span>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400 min-w-0">
+                  <span className="break-words [overflow-wrap:anywhere]">
                     Role: <strong className="text-zinc-200 font-medium">{role || "Unassigned"}</strong>
                   </span>
                   <span>&bull;</span>
-                  <span>
+                  <span className="break-words [overflow-wrap:anywhere]">
                     Phase: <strong className="text-zinc-200 font-medium">{formatEnumLabel(horizon) || "Not specified"}</strong>
                   </span>
                 </div>
 
                 {/* Dependencies Linkages */}
                 {deps.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 min-w-0">
                     <span className="text-[10px] font-mono uppercase text-zinc-500">Requires:</span>
                     {deps.map((depId) => {
                       const depAction = actionMap.get(depId);
@@ -233,7 +233,7 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
                       return (
                         <span
                           key={depId}
-                          className="rounded bg-indigo-950/50 border border-indigo-800/50 px-1.5 py-0.2 text-[10px] font-mono text-indigo-300"
+                          className="rounded bg-indigo-950/50 border border-indigo-800/50 px-1.5 py-0.2 text-[10px] font-mono text-indigo-300 break-words [overflow-wrap:anywhere]"
                         >
                           {depSeq ? `Action #${depSeq}` : depId}
                         </span>
@@ -242,19 +242,25 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
                   </div>
                 )}
 
-                {/* Expanded Concrete Execution Steps (ONLY when real steps exist, NO placeholders!) */}
-                {isExpanded && (
-                  <div className="pt-2 border-t border-zinc-800/60 space-y-2">
-                    <p className="text-zinc-300 leading-relaxed font-sans">
+                {/* Expanded Concrete Execution Steps with smooth transition */}
+                <div
+                  className={`grid transition-all duration-200 ease-in-out motion-reduce:transition-none ${
+                    isExpanded
+                      ? "grid-rows-[1fr] opacity-100 pt-2 border-t border-zinc-800/60 mt-1"
+                      : "grid-rows-[0fr] opacity-0"
+                  }`}
+                >
+                  <div className="overflow-hidden space-y-2 min-w-0">
+                    <p className="text-zinc-300 leading-relaxed font-sans break-words [overflow-wrap:anywhere]">
                       {act.description}
                     </p>
 
                     {execSteps && execSteps.length > 0 && (
-                      <div className="space-y-1">
+                      <div className="space-y-1 min-w-0">
                         <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 font-semibold block">
                           Concrete Execution Steps:
                         </span>
-                        <ol className="list-decimal list-inside space-y-1 text-zinc-200 pl-1">
+                        <ol className="list-decimal list-inside space-y-1 text-zinc-200 pl-1 break-words [overflow-wrap:anywhere]">
                           {execSteps.map((step, sIdx) => (
                             <li key={sIdx} className="leading-snug">
                               {step}
@@ -264,7 +270,7 @@ export function ActionTimelineVisual({ actions }: ActionTimelineVisualProps) {
                       </div>
                     )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
           );

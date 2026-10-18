@@ -735,4 +735,216 @@ describe("AURA Final Premium Transformation Tests", () => {
     assert.ok(!markup500.includes("503 — AI Service Temporarily Unavailable"), "HTTP 500 must not display 503 title");
     assert.ok(!markup500.includes("Gemini may be experiencing high traffic"), "HTTP 500 must not display Gemini explanation");
   });
+
+  // ----------------------------------------------------------------------------
+  // 20. Executive KPI Grid: Overflow Prevention for Short, Long, and Unbroken AI Strings
+  // ----------------------------------------------------------------------------
+  test("20. ExecutiveKpiGrid handles short labels, long labels, and extreme unbroken strings safely", () => {
+    const kpis = [
+      {
+        id: "status-short",
+        label: "Decision Stance",
+        value: "PILOT",
+        subtext: "Executable within baseline envelope",
+        statusClass: "text-emerald-400 border-emerald-800/60 bg-emerald-950/40",
+        icon: "✓",
+      },
+      {
+        id: "status-long",
+        label: "Decision Stance",
+        value: "CONDITIONAL INTERNATIONAL EXPANSION",
+        subtext: "Contingent on regulatory licensing and cross-border data governance",
+        statusClass: "text-rose-400 border-rose-800/60 bg-rose-950/40",
+        icon: "✕",
+      },
+      {
+        id: "status-extreme-unbroken",
+        label: "Unbroken Token",
+        value: "VERYLONGAIGENERATEDRECOMMENDATIONSTANCESTRINGWITHOUTANYSUBSTRINGSPACES",
+        subtext: "EXTREMEUNBROKENAIGENERATEDSUBTEXTWITHOUTSPACES",
+        statusClass: "text-rose-400 border-rose-800/60 bg-rose-950/40",
+        icon: "✕",
+      },
+    ];
+
+    const markup = renderToStaticMarkup(
+      React.createElement(ExecutiveKpiGrid, { kpis })
+    );
+
+    // Verify all text values are rendered
+    assert.ok(markup.includes("PILOT"), "Must render short label 'PILOT'");
+    assert.ok(
+      markup.includes("CONDITIONAL INTERNATIONAL EXPANSION"),
+      "Must render long label 'CONDITIONAL INTERNATIONAL EXPANSION'"
+    );
+    assert.ok(
+      markup.includes("VERYLONGAIGENERATEDRECOMMENDATIONSTANCESTRINGWITHOUTANYSUBSTRINGSPACES"),
+      "Must render extreme unbroken AI generated string"
+    );
+
+    // Verify overflow-prevention classes
+    assert.ok(
+      markup.includes("[overflow-wrap:anywhere]"),
+      "Must include [overflow-wrap:anywhere] to prevent unbroken string overflow"
+    );
+    assert.ok(
+      markup.includes("break-words"),
+      "Must include break-words for graceful multi-word wrapping"
+    );
+    assert.ok(
+      markup.includes("min-w-0"),
+      "Must include min-w-0 on flex/grid items to prevent CSS flex item expansion"
+    );
+
+    // Verify responsive dynamic font scaling (extreme string gets text-xs, long string gets text-xs or text-sm)
+    assert.ok(
+      markup.includes("text-xs sm:text-xs"),
+      "Must dynamically downscale font size for extreme strings (>30 chars)"
+    );
+
+    // Verify accessible title attributes are present for full text inspection
+    assert.ok(
+      markup.includes('title="CONDITIONAL INTERNATIONAL EXPANSION"'),
+      "Must provide title tooltip with full text for long decision stance"
+    );
+    assert.ok(
+      markup.includes('title="VERYLONGAIGENERATEDRECOMMENDATIONSTANCESTRINGWITHOUTANYSUBSTRINGSPACES"'),
+      "Must provide title tooltip with full text for unbroken string"
+    );
+
+    // Verify hover and reduced-motion classes
+    assert.ok(
+      markup.includes("motion-reduce:transition-none"),
+      "Must respect prefers-reduced-motion"
+    );
+    assert.ok(
+      markup.includes("duration-200"),
+      "Must use short professional transition duration (150-250ms)"
+    );
+  });
+
+  // ----------------------------------------------------------------------------
+  // 21. High-Risk Dashboard Components Text Overflow & Layout Safety
+  // ----------------------------------------------------------------------------
+  test("21. High-risk dashboard components apply break-words, overflow-wrap, and min-w-0", () => {
+    // 1. Risk Matrix
+    const missing = ["UNBROKENRISKDESCRIPTIONSTRINGWITHOUTSPACES" + "A".repeat(50)];
+    const conditions = ["UNBROKENTRIGGERSTRINGWITHOUTSPACES" + "B".repeat(50)];
+    const matrixMarkup = renderToStaticMarkup(
+      React.createElement(RiskUncertaintyMatrix, {
+        missingInputs: missing,
+        changingConditions: conditions,
+      })
+    );
+    assert.ok(
+      matrixMarkup.includes("[overflow-wrap:anywhere]"),
+      "RiskUncertaintyMatrix must include [overflow-wrap:anywhere]"
+    );
+    assert.ok(
+      matrixMarkup.includes("min-w-0"),
+      "RiskUncertaintyMatrix must include min-w-0"
+    );
+    assert.ok(
+      matrixMarkup.includes("motion-reduce:transition-none"),
+      "RiskUncertaintyMatrix must include motion-reduce safety"
+    );
+
+    // 2. Stage Progression Tracker
+    const stages = [
+      {
+        stage: 1,
+        id: "stage1",
+        title: "UNBROKENSTAGETITLEWITHOUTSPACES" + "B".repeat(40),
+        shortName: "Stage 1",
+        isComplete: true,
+        metricLabel: "Complete",
+        badgeClass: "text-indigo-400",
+      },
+    ];
+    const trackerMarkup = renderToStaticMarkup(
+      React.createElement(StageProgressionTracker, {
+        stages,
+        openSections: { stage1: true },
+        onSelectStage: () => {},
+      })
+    );
+    assert.ok(
+      trackerMarkup.includes("min-w-0"),
+      "StageProgressionTracker must include min-w-0 on stages"
+    );
+    assert.ok(
+      trackerMarkup.includes("motion-reduce:transition-none"),
+      "StageProgressionTracker must include motion-reduce safety"
+    );
+
+    // 3. Action Timeline Visual
+    const actions = [
+      {
+        id: "act-extreme",
+        title: "UNBROKENACTIONTITLEWITHOUTSPACES" + "C".repeat(50),
+        priority: "critical",
+        time_horizon: "Immediate",
+        sequence: 1,
+        description: "UNBROKENACTIONDESCRIPTIONWITHOUTSPACES" + "D".repeat(60),
+      },
+    ];
+    const timelineMarkup = renderToStaticMarkup(
+      React.createElement(ActionTimelineVisual, { actions })
+    );
+    assert.ok(
+      timelineMarkup.includes("[overflow-wrap:anywhere]"),
+      "ActionTimelineVisual must include [overflow-wrap:anywhere]"
+    );
+    assert.ok(
+      timelineMarkup.includes("min-w-0"),
+      "ActionTimelineVisual must include min-w-0"
+    );
+  });
+
+  // ----------------------------------------------------------------------------
+  // 22. Interaction Smoothness & Accordion Height Transitions
+  // ----------------------------------------------------------------------------
+  test("22. Expandable components and overview use smooth CSS grid transitions and reduced-motion safety", () => {
+    // Overview View with recommendation and collapsible rationale
+    const overviewMarkup = renderToStaticMarkup(
+      React.createElement(OverviewView, {
+        result: MOCK_RESULT,
+        onNavigateTab: () => {},
+      })
+    );
+
+    // Verify smooth grid height transition is configured
+    assert.ok(
+      overviewMarkup.includes("grid-rows-"),
+      "OverviewView rationale accordion must use pure CSS grid row height transition"
+    );
+    assert.ok(
+      overviewMarkup.includes("duration-200"),
+      "OverviewView rationale accordion must use 200ms transition"
+    );
+    assert.ok(
+      overviewMarkup.includes("motion-reduce:transition-none"),
+      "OverviewView rationale accordion must respect prefers-reduced-motion"
+    );
+
+    // Decision Model Summary
+    const dmSummaryMarkup = renderToStaticMarkup(
+      React.createElement(DecisionModelSummary, {
+        model: MOCK_RESULT.decision_model,
+      })
+    );
+    assert.ok(
+      dmSummaryMarkup.includes("grid-rows-"),
+      "DecisionModelSummary must use pure CSS grid row height transition"
+    );
+    assert.ok(
+      dmSummaryMarkup.includes("duration-200"),
+      "DecisionModelSummary must use 200ms transition"
+    );
+    assert.ok(
+      dmSummaryMarkup.includes("motion-reduce:transition-none"),
+      "DecisionModelSummary must respect prefers-reduced-motion"
+    );
+  });
 });
+

@@ -133,7 +133,7 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                 <div
                   key={scen.scenario_type}
                   onClick={() => setSelectedScenarioType(scen.scenario_type)}
-                  className={`rounded-xl border p-4 sm:p-5 space-y-3.5 cursor-pointer transition-all flex flex-col justify-between h-full ${
+                  className={`rounded-xl border p-4 sm:p-5 space-y-3.5 cursor-pointer transition-all duration-200 motion-reduce:transition-none flex flex-col justify-between h-full min-w-0 overflow-hidden ${
                     isSelected
                       ? "border-sky-500 bg-zinc-900/80 shadow-md ring-1 ring-sky-500/30"
                       : "border-zinc-800 bg-zinc-950/60 hover:border-zinc-700"
@@ -147,9 +147,12 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                     }
                   }}
                 >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs uppercase tracking-wider font-bold text-zinc-200 print:text-black">
+                  <div className="space-y-3 min-w-0">
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <span
+                        className="font-mono text-xs uppercase tracking-wider font-bold text-zinc-200 print:text-black break-words [overflow-wrap:anywhere] min-w-0"
+                        title={scen.name}
+                      >
                         {scen.name}
                       </span>
                       <span className="text-[10px] font-mono text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 print:bg-white print:border-zinc-300 shrink-0">
@@ -158,9 +161,9 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                     </div>
 
                     {/* Narrative with progressive disclosure */}
-                    <div className="space-y-1">
+                    <div className="space-y-1 min-w-0">
                       <p
-                        className={`text-xs text-zinc-300 font-sans leading-relaxed print:text-zinc-800 break-words ${
+                        className={`text-xs text-zinc-300 font-sans leading-relaxed print:text-zinc-800 break-words [overflow-wrap:anywhere] transition-all duration-200 motion-reduce:transition-none ${
                           expandedNarratives[scen.scenario_type] ? "" : "line-clamp-2"
                         }`}
                       >
@@ -176,7 +179,7 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                               [scen.scenario_type]: !prev[scen.scenario_type],
                             }));
                           }}
-                          className="text-[10px] font-mono text-sky-400 hover:text-sky-300 underline cursor-pointer select-none"
+                          className="text-[10px] font-mono text-sky-400 hover:text-sky-300 underline cursor-pointer select-none transition-colors duration-200 motion-reduce:transition-none"
                         >
                           {expandedNarratives[scen.scenario_type] ? "Hide Full Narrative ▲" : "Read Full Narrative ▼"}
                         </button>
@@ -204,12 +207,12 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                         >
                           <div
                             style={{ width: `${oppPct}%` }}
-                            className="bg-emerald-500 h-full transition-all"
+                            className="bg-emerald-500 h-full transition-all duration-200 motion-reduce:transition-none"
                             title={`${oppsCount} Upside Drivers (${oppPct}%)`}
                           />
                           <div
                             style={{ width: `${100 - oppPct}%` }}
-                            className="bg-rose-500 h-full transition-all"
+                            className="bg-rose-500 h-full transition-all duration-200 motion-reduce:transition-none"
                             title={`${risksCount} Vulnerabilities (${100 - oppPct}%)`}
                           />
                         </div>
@@ -250,7 +253,7 @@ export function ExploreView({ result, ownerId }: ExploreViewProps) {
                         </span>
                         <ul className="space-y-1.5 list-disc list-inside text-zinc-300 print:text-zinc-700">
                           {scen.risks.map((r, rIdx) => (
-                            <li key={rIdx} className="leading-relaxed break-words">
+                            <li key={rIdx} className="leading-relaxed break-words [overflow-wrap:anywhere]">
                               {r}
                             </li>
                           ))}
